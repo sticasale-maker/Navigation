@@ -1016,15 +1016,41 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
 
     // ── Build GPX ──
     var gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    gpx += '<gpx version="1.1" creator="DiveNav" xmlns="http://www.topografix.com/GPX/1/1">\n';
+    gpx += '<gpx version="1.1" creator="DiveNav" xmlns="http://www.topografix.com/GPX/1/1" xmlns:divenav="http://divenav/ext/1">\n';
     gpx += '  <trk><name>DiveNav Log ' + new Date().toISOString().slice(0,10) + '</name><trkseg>\n';
     fixes.forEach(function(f) {
       gpx += '    <trkpt lat="' + f.lat + '" lon="' + f.lon + '">\n';
       gpx += '      <time>' + f.ts + '</time>\n';
+      gpx += '      <desc>GPS accuracy: \xb1' + Math.round(f.acc) + 'm</desc>\n';
       gpx += '      <hdop>' + (f.acc/5).toFixed(1) + '</hdop>\n';
+      gpx += '      <extensions><divenav:accuracy>' + Math.round(f.acc) + '</divenav:accuracy></extensions>\n';
       gpx += '    </trkpt>\n';
     });
     gpx += '  </trkseg></trk>\n</gpx>';
+
+    // ── Build KML (opens in Google Maps with accuracy visible on each point) ──
+    var kml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+    kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n';
+    kml += '  <name>DiveNav Log ' + new Date().toISOString().slice(0,10) + '</name>\n';
+    kml += '  <Style id="dot"><IconStyle><color>ff00d4ff</color><scale>0.6</scale>';
+    kml += '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>';
+    kml += '</IconStyle></Style>\n';
+    fixes.forEach(function(f, idx) {
+      var t = f.ts.replace('T',' ').slice(0,19);
+      var accRounded = Math.round(f.acc);
+      kml += '  <Placemark>\n';
+      kml += '    <styleUrl>#dot</styleUrl>\n';
+      kml += '    <name>\xb1' + accRounded + 'm</name>\n';
+      kml += '    <description><![CDATA[';
+      kml += '<b>GPS Accuracy:</b> \xb1' + accRounded + 'm<br/>';
+      kml += '<b>Time:</b> ' + t + '<br/>';
+      kml += '<b>Lat:</b> ' + f.lat.toFixed(6) + '<br/>';
+      kml += '<b>Lon:</b> ' + f.lon.toFixed(6);
+      kml += ']]></description>\n';
+      kml += '    <Point><coordinates>' + f.lon + ',' + f.lat + ',0</coordinates></Point>\n';
+      kml += '  </Placemark>\n';
+    });
+    kml += '</Document>\n</kml>';
 
     var dateStr = new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');
     var TO_EMAIL = 'sticasale@gmail.com';
@@ -1033,22 +1059,23 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
     if (navigator.canShare) {
       var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
       var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
-      var shareData = { files: [csvFile, gpxFile], title: 'DiveNav GPS Log' };
+      var kmlFile = new File([kml], 'divenav_' + dateStr + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
+      var shareData = { files: [csvFile, gpxFile, kmlFile], title: 'DiveNav GPS Log' };
       if (navigator.canShare(shareData)) {
         navigator.share(shareData).then(function() {
           clearLogFixes(function() { updateLogUI(0); log('Log sent and cleared', 'lok'); });
         }).catch(function(err) {
-          if (err.name !== 'AbortError') fallbackSend(csv, gpx, dateStr, TO_EMAIL);
+          if (err.name !== 'AbortError') fallbackSend(csv, gpx, kml, dateStr, TO_EMAIL);
         });
         return;
       }
     }
-    fallbackSend(csv, gpx, dateStr, TO_EMAIL);
+    fallbackSend(csv, gpx, kml, dateStr, TO_EMAIL);
   });
 });
 
-function fallbackSend(csv, gpx, dateStr, email) {
-  // Download both files then open Mail with recipient pre-filled
+function fallbackSend(csv, gpx, kml, dateStr, email) {
+  // Download all three files then open Mail with recipient pre-filled
   var a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
   a.download = 'divenav_' + dateStr + '.csv';
@@ -1059,12 +1086,17 @@ function fallbackSend(csv, gpx, dateStr, email) {
     b.download = 'divenav_' + dateStr + '.gpx';
     b.click();
     setTimeout(function() {
-      // Open Mail with recipient and subject pre-filled; user attaches the downloaded files
-      window.location.href = 'mailto:' + email
-        + '?subject=' + encodeURIComponent('DiveNav GPS Log ' + dateStr)
-        + '&body=' + encodeURIComponent('GPS log files attached (divenav_' + dateStr + '.csv and .gpx).');
-      clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
-    }, 600);
+      var c = document.createElement('a');
+      c.href = 'data:application/vnd.google-earth.kml+xml;charset=utf-8,' + encodeURIComponent(kml);
+      c.download = 'divenav_' + dateStr + '.kml';
+      c.click();
+      setTimeout(function() {
+        window.location.href = 'mailto:' + email
+          + '?subject=' + encodeURIComponent('DiveNav GPS Log ' + dateStr)
+          + '&body=' + encodeURIComponent('GPS log files attached (divenav_' + dateStr + '.csv, .gpx and .kml). Open the .kml in Google Maps to see accuracy per point.');
+        clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
+      }, 600);
+    }, 500);
   }, 500);
 }
 </script>
