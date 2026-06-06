@@ -135,7 +135,6 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 .c3 .btn-here { border-color: rgba(255,159,67,0.35);  color: #ff9f43; }
 .c4 .btn-here { border-color: rgba(238,90,155,0.35);  color: #ee5a9b; }
 .btn-coord { border-color: var(--border); color: var(--muted); }
-.btn-clr   { border-color: var(--border); color: var(--muted); }
 .btn-del   { border-color: rgba(255,107,53,0.4); color: var(--warn); }
 .btn-sm:active { opacity: 0.55; }
 
@@ -175,6 +174,11 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   font-family: 'Share Tech Mono', monospace;
   font-size: 16px; color: var(--muted);
 }
+.data-unit-inline {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 28px; color: var(--text);
+  letter-spacing: 0; margin-left: 2px;
+}
 .data-sub {
   font-size: 14px; color: var(--muted);
   letter-spacing: 1px; margin-top: 2px;
@@ -184,9 +188,9 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 .btn-add {
   width: 100%; padding: 14px;
   font-family: 'Share Tech Mono', monospace;
-  font-size: 13px; letter-spacing: 2px;
+  font-size: 15px; letter-spacing: 2px;
   border-radius: 10px; border: 1px dashed rgba(0,212,255,0.25);
-  background: transparent; color: var(--muted); cursor: pointer;
+  background: transparent; color: var(--text); cursor: pointer;
 }
 .btn-add:active { background: rgba(0,212,255,0.05); }
 
@@ -250,7 +254,7 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   border: 1px solid rgba(0,212,255,0.07);
   border-radius: 8px; padding: 8px 10px;
   font-family: 'Share Tech Mono', monospace;
-  font-size: 10px; color: var(--muted);
+  font-size: 13px; color: var(--muted);
   line-height: 1.9; max-height: 80px; overflow-y: auto;
 }
 .lok { color: var(--accent2); }
@@ -293,6 +297,44 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   color: var(--warn);
 }
 #instrModal.hidden { display: none !important; }
+
+/* ---- Data Logger Footer ---- */
+footer#loggerFooter {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 10px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+#loggerStatus {
+  display: flex; align-items: center; gap: 7px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--muted); letter-spacing: 1px;
+  min-width: 110px;
+}
+.ldot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.ldot.off  { background: var(--muted); }
+.ldot.on   { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: blink 1.5s infinite; }
+.logger-count {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--muted); letter-spacing: 1px;
+  flex: 1; text-align: center;
+}
+#loggerBtns { display: flex; gap: 7px; }
+.footer-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; letter-spacing: 1.5px;
+  padding: 7px 11px; border-radius: 6px;
+  border: 1px solid; cursor: pointer;
+  background: transparent; line-height: 1;
+}
+.btn-logger-start { border-color: rgba(0,255,157,0.4); color: var(--accent2); }
+.btn-logger-stop  { border-color: rgba(255,107,53,0.5); color: var(--warn); }
+.btn-logger-send  { border-color: rgba(0,212,255,0.35); color: var(--accent); }
+.footer-btn:disabled { opacity: 0.3; cursor: default; }
+.footer-btn:active:not(:disabled) { opacity: 0.55; }
 </style>
 
 <script>
@@ -479,6 +521,15 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   <div id="log"><span class="linf">Tap START…</span></div>
 </main>
 
+<footer id="loggerFooter">
+  <div id="loggerStatus"><span id="loggerDot" class="ldot off"></span><span id="loggerLbl">LOGGER OFF</span></div>
+  <div id="loggerCount" class="logger-count">0 fixes</div>
+  <div id="loggerBtns">
+    <button id="loggerToggleBtn" class="footer-btn btn-logger-start">START LOG</button>
+    <button id="loggerSendBtn" class="footer-btn btn-logger-send" disabled>SEND LOG</button>
+  </div>
+</footer>
+
 <script>
 var myPos = null;
 var modalIdx = -1;
@@ -534,6 +585,48 @@ document.getElementById('instrBtn').addEventListener('click', function() {
 document.getElementById('instrModal').addEventListener('click', function(e) {
   if (e.target === this) this.classList.add('hidden');
 });
+// ── Single IndexedDB open at v2 — stores: 'data' (waypoints) + 'gpslog' (fixes) ──
+var DB_NAME = 'divenav', DB_STORE = 'data', DB_KEY = 'wps';
+var _db = null;
+var _dbReady = false;
+var _dbQueue = [];
+
+function openDB(cb) {
+  if (_dbReady) { cb(_db); return; }
+  _dbQueue.push(cb);
+  if (_dbQueue.length > 1) return; // already opening
+  var req = indexedDB.open(DB_NAME, 2);
+  req.onupgradeneeded = function(e) {
+    var db = e.target.result;
+    if (!db.objectStoreNames.contains(DB_STORE))
+      db.createObjectStore(DB_STORE);
+    if (!db.objectStoreNames.contains('gpslog'))
+      db.createObjectStore('gpslog', { autoIncrement: true });
+  };
+  req.onsuccess = function(e) {
+    _db = e.target.result;
+    _dbReady = true;
+    _dbQueue.forEach(function(fn) { fn(_db); });
+    _dbQueue = [];
+  };
+  req.onerror = function() {
+    _dbReady = true; // unblock queue even on error
+    _dbQueue.forEach(function(fn) { fn(null); });
+    _dbQueue = [];
+  };
+}
+
+function saveWPs() {
+  try { localStorage.setItem('divenav_wps', JSON.stringify(wps)); } catch(e) {}
+  openDB(function(db) {
+    if (!db) return;
+    try {
+      var tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put(JSON.stringify(wps), DB_KEY);
+    } catch(e) {}
+  });
+}
+
 function loadWPs() {
   try {
     var saved = localStorage.getItem('divenav_wps');
@@ -544,10 +637,50 @@ function loadWPs() {
     { name: 'WP 2', lat: null, lon: null }
   ];
 }
-function saveWPs() {
-  try { localStorage.setItem('divenav_wps', JSON.stringify(wps)); } catch(e) {}
+
+function loadWPsFromDB(cb) {
+  openDB(function(db) {
+    if (!db) { cb(null); return; }
+    try {
+      var tx  = db.transaction(DB_STORE, 'readonly');
+      var req = tx.objectStore(DB_STORE).get(DB_KEY);
+      req.onsuccess = function() {
+        try { cb(req.result ? JSON.parse(req.result) : null); }
+        catch(e) { cb(null); }
+      };
+      req.onerror = function() { cb(null); };
+    } catch(e) { cb(null); }
+  });
 }
+
 var wps = loadWPs();
+
+// Initialise DB once; reconcile waypoints and seed log count
+openDB(function(db) {
+  if (!db) return;
+  // Reconcile waypoints
+  try {
+    var tx = db.transaction(DB_STORE, 'readonly');
+    var req = tx.objectStore(DB_STORE).get(DB_KEY);
+    req.onsuccess = function() {
+      if (req.result) {
+        try {
+          var dbWps = JSON.parse(req.result);
+          if (dbWps && dbWps.length) {
+            wps = dbWps;
+            try { localStorage.setItem('divenav_wps', JSON.stringify(wps)); } catch(e) {}
+          }
+        } catch(e) {}
+      }
+    };
+  } catch(e) {}
+  // Seed log fix count for UI
+  try {
+    var tx2 = db.transaction('gpslog', 'readonly');
+    var req2 = tx2.objectStore('gpslog').count();
+    req2.onsuccess = function() { updateLogUI(req2.result); };
+  } catch(e) {}
+});
 var colorClasses = ['c1','c2','c3','c4'];
 
 // ── Log ──
@@ -621,8 +754,6 @@ function render() {
 
     // Top row
     var coordSub = wp.lat !== null ? fmtCoord(wp.lat, wp.lon) : 'no position set';
-    var clrBtn = wp.lat !== null ? '<button class="btn-sm btn-clr" onclick="clearWP('+i+')">CLR</button>' : '';
-
     card.innerHTML =
       '<div class="wp-top">'+
         '<div class="wp-label-row">'+
@@ -632,7 +763,6 @@ function render() {
         '<div class="wp-btns">'+
           '<button class="btn-sm btn-here" onclick="setHere('+i+')">SET HERE</button>'+
           '<button class="btn-sm btn-coord" onclick="openModal('+i+')">COORDS</button>'+
-          clrBtn+
           '<button class="btn-sm btn-del" onclick="deleteWP('+i+')">DEL</button>'+
         '</div>'+
       '</div>'+
@@ -658,8 +788,7 @@ function updateDataCells(i, wp) {
     distHTML =
       '<div class="wp-data-cell">'+
         '<div class="data-label">Distance</div>'+
-        '<div class="data-val">'+d.v+'</div>'+
-        '<div class="data-unit">'+d.u+'</div>'+
+        '<div class="data-val">'+d.v+'<span class="data-unit-inline">'+d.u+'</span></div>'+
       '</div>';
     bearHTML =
       '<div class="wp-data-cell">'+
@@ -697,10 +826,6 @@ function setHere(i) {
   wps[i].lat = myPos.lat;
   wps[i].lon = myPos.lon;
   log('WP'+(i+1)+' set ±'+Math.round(myPos.acc)+'m', 'lok');
-  saveWPs(); render();
-}
-function clearWP(i) {
-  wps[i].lat = null; wps[i].lon = null;
   saveWPs(); render();
 }
 function deleteWP(i) {
@@ -787,6 +912,161 @@ document.getElementById('startBtn').addEventListener('click', function() {
   startGPS();
   requestWakeLock();
 });
+
+// ---- Data Logger ----
+var LOG_STORE = 'gpslog';
+var loggerActive = false;
+var loggerInterval = null;
+var logCount = 0;
+
+function saveLogFix() {
+  if (!myPos) return;
+  if (!_db) return;
+  try {
+    var fix = {
+      ts: new Date().toISOString(),
+      lat: myPos.lat,
+      lon: myPos.lon,
+      acc: myPos.acc
+    };
+    var tx = _db.transaction(LOG_STORE, 'readwrite');
+    tx.objectStore(LOG_STORE).add(fix);
+    tx.oncomplete = function() {
+      countLogFixes(function(n) { updateLogUI(n); });
+    };
+  } catch(e) {}
+}
+
+function countLogFixes(cb) {
+  if (!_db) { cb(0); return; }
+  try {
+    var tx = _db.transaction(LOG_STORE, 'readonly');
+    var req = tx.objectStore(LOG_STORE).count();
+    req.onsuccess = function() { cb(req.result); };
+    req.onerror   = function() { cb(0); };
+  } catch(e) { cb(0); }
+}
+
+function getAllLogFixes(cb) {
+  if (!_db) { cb([]); return; }
+  try {
+    var fixes = [];
+    var tx = _db.transaction(LOG_STORE, 'readonly');
+    tx.objectStore(LOG_STORE).openCursor().onsuccess = function(e) {
+      var cur = e.target.result;
+      if (cur) { fixes.push(cur.value); cur.continue(); }
+      else cb(fixes);
+    };
+  } catch(e) { cb([]); }
+}
+
+function clearLogFixes(cb) {
+  if (!_db) { if(cb) cb(); return; }
+  try {
+    var tx = _db.transaction(LOG_STORE, 'readwrite');
+    tx.objectStore(LOG_STORE).clear();
+    tx.oncomplete = function() { if(cb) cb(); };
+  } catch(e) { if(cb) cb(); }
+}
+
+function updateLogUI(n) {
+  logCount = n;
+  document.getElementById('loggerCount').textContent = n + ' fix' + (n === 1 ? '' : 'es');
+  document.getElementById('loggerSendBtn').disabled = (n === 0);
+}
+
+function startLogger() {
+  loggerActive = true;
+  var btn = document.getElementById('loggerToggleBtn');
+  btn.textContent = 'STOP LOG';
+  btn.className = 'footer-btn btn-logger-stop';
+  document.getElementById('loggerDot').className = 'ldot on';
+  document.getElementById('loggerLbl').textContent = 'LOGGING';
+  saveLogFix(); // immediate first fix
+  loggerInterval = setInterval(saveLogFix, 2000);
+  log('Data logger started', 'linf');
+}
+
+function stopLogger() {
+  loggerActive = false;
+  clearInterval(loggerInterval);
+  loggerInterval = null;
+  var btn = document.getElementById('loggerToggleBtn');
+  btn.textContent = 'START LOG';
+  btn.className = 'footer-btn btn-logger-start';
+  document.getElementById('loggerDot').className = 'ldot off';
+  document.getElementById('loggerLbl').textContent = 'LOGGER OFF';
+  log('Data logger stopped', 'linf');
+  countLogFixes(function(n) { updateLogUI(n); });
+}
+
+document.getElementById('loggerToggleBtn').addEventListener('click', function() {
+  if (loggerActive) stopLogger(); else startLogger();
+});
+
+document.getElementById('loggerSendBtn').addEventListener('click', function() {
+  getAllLogFixes(function(fixes) {
+    if (!fixes.length) return;
+
+    // ── Build CSV ──
+    var csv = 'timestamp,latitude,longitude,accuracy_m\n';
+    fixes.forEach(function(f) {
+      csv += f.ts + ',' + f.lat + ',' + f.lon + ',' + f.acc + '\n';
+    });
+
+    // ── Build GPX ──
+    var gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
+    gpx += '<gpx version="1.1" creator="DiveNav" xmlns="http://www.topografix.com/GPX/1/1">\n';
+    gpx += '  <trk><name>DiveNav Log ' + new Date().toISOString().slice(0,10) + '</name><trkseg>\n';
+    fixes.forEach(function(f) {
+      gpx += '    <trkpt lat="' + f.lat + '" lon="' + f.lon + '">\n';
+      gpx += '      <time>' + f.ts + '</time>\n';
+      gpx += '      <hdop>' + (f.acc/5).toFixed(1) + '</hdop>\n';
+      gpx += '    </trkpt>\n';
+    });
+    gpx += '  </trkseg></trk>\n</gpx>';
+
+    var dateStr = new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');
+    var TO_EMAIL = 'sticasale@gmail.com';
+
+    // ── Share via Web Share API (native iOS share sheet) ──
+    if (navigator.canShare) {
+      var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
+      var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
+      var shareData = { files: [csvFile, gpxFile], title: 'DiveNav GPS Log' };
+      if (navigator.canShare(shareData)) {
+        navigator.share(shareData).then(function() {
+          clearLogFixes(function() { updateLogUI(0); log('Log sent and cleared', 'lok'); });
+        }).catch(function(err) {
+          if (err.name !== 'AbortError') fallbackSend(csv, gpx, dateStr, TO_EMAIL);
+        });
+        return;
+      }
+    }
+    fallbackSend(csv, gpx, dateStr, TO_EMAIL);
+  });
+});
+
+function fallbackSend(csv, gpx, dateStr, email) {
+  // Download both files then open Mail with recipient pre-filled
+  var a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'divenav_' + dateStr + '.csv';
+  a.click();
+  setTimeout(function() {
+    var b = document.createElement('a');
+    b.href = 'data:application/gpx+xml;charset=utf-8,' + encodeURIComponent(gpx);
+    b.download = 'divenav_' + dateStr + '.gpx';
+    b.click();
+    setTimeout(function() {
+      // Open Mail with recipient and subject pre-filled; user attaches the downloaded files
+      window.location.href = 'mailto:' + email
+        + '?subject=' + encodeURIComponent('DiveNav GPS Log ' + dateStr)
+        + '&body=' + encodeURIComponent('GPS log files attached (divenav_' + dateStr + '.csv and .gpx).');
+      clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
+    }, 600);
+  }, 500);
+}
 </script>
 </body>
 </html>
