@@ -354,16 +354,21 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 /* ---- Data Logger Footer ---- */
 footer#loggerFooter {
   flex-shrink: 0;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; padding: 10px 14px;
+  display: flex; flex-direction: column;
+  gap: 8px; padding: 10px 14px;
   background: var(--surface);
   border-top: 1px solid var(--border);
+}
+#loggerRow1 {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+#loggerRow2 {
+  display: flex; align-items: center; gap: 8px;
 }
 #loggerStatus {
   display: flex; align-items: center; gap: 7px;
   font-family: 'Share Tech Mono', monospace;
   font-size: 14px; color: var(--muted); letter-spacing: 1px;
-  min-width: 110px;
 }
 .ldot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -373,9 +378,10 @@ footer#loggerFooter {
 .logger-count {
   font-family: 'Share Tech Mono', monospace;
   font-size: 14px; color: var(--muted); letter-spacing: 1px;
-  flex: 1; text-align: center;
+  flex: 1; text-align: right;
 }
-#loggerBtns { display: flex; gap: 7px; }
+#loggerBtns { display: flex; gap: 8px; flex: 1; }
+#loggerBtns .footer-btn { flex: 1; text-align: center; padding: 14px 8px; }
 .footer-btn {
   font-family: 'Share Tech Mono', monospace;
   font-size: 17px; letter-spacing: 1.5px;
@@ -387,6 +393,7 @@ footer#loggerFooter {
 .btn-logger-start { border-color: rgba(0,255,157,0.6); color: var(--accent2); background: rgba(0,255,157,0.07); }
 .btn-logger-stop  { border-color: rgba(255,107,53,0.7); color: var(--warn);   background: rgba(255,107,53,0.07); }
 .btn-logger-send  { border-color: rgba(0,212,255,0.55); color: var(--accent); background: rgba(0,212,255,0.07); }
+.btn-logger-del   { border-color: var(--warn); color: #fff; background: rgba(255,107,53,0.6); }
 .footer-btn:disabled { opacity: 0.3; cursor: default; }
 .footer-btn:active:not(:disabled) { opacity: 0.55; }
 </style>
@@ -554,7 +561,6 @@ footer#loggerFooter {
     <span id="gpsLbl">ACQUIRING</span>
   </div>
   <button id="instrBtn">📖 INFO</button>
-  <button id="lockBtn">🔒 LOCK</button>
 </header>
 
 <div id="readyBanner">
@@ -571,7 +577,12 @@ footer#loggerFooter {
     <div style="font-size:18px;color:var(--text);line-height:1.8;">Name your waypoints and enter coords (by SET HERE and COORDS)</div>
     <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-top:4px;">At the dive site:</div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">1.</span> Wait for the <span style="color:var(--accent2);">READY TO DIVE</span> banner to appear — this means GPS has a solid fix (±15m or better held for 5 seconds).</div>
-    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">2.</span> Enable <b>Airplane Mode</b>. This kills the cellular radio (the biggest battery drain when there's no signal) and stops GPS from retrying underwater.</div>
+    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">2.</span> SET:</div>
+    <div style="font-size:18px;line-height:2;padding-left:18px;">
+      <div><span style="color:var(--warn);font-weight:700;">✕ NO</span> Airplane Mode</div>
+      <div><span style="color:var(--warn);font-weight:700;">✕ NO</span> Wi-Fi or Bluetooth</div>
+      <div><span style="color:var(--accent2);font-weight:700;">✓ YES</span> Mobile Data</div>
+    </div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">3.</span> Lock the screen, close the box and good luck with your explorations!</div>
     <button onclick="document.getElementById('instrModal').classList.add('hidden')" style="margin-top:6px;font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;padding:13px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CLOSE</button>
   </div>
@@ -584,11 +595,17 @@ footer#loggerFooter {
 </main>
 
 <footer id="loggerFooter">
-  <div id="loggerStatus"><span id="loggerDot" class="ldot off"></span><span id="loggerLbl">LOGGER OFF</span></div>
-  <div id="loggerCount" class="logger-count">0 fixes</div>
-  <div id="loggerBtns">
-    <button id="loggerToggleBtn" class="footer-btn btn-logger-start">START LOG</button>
-    <button id="loggerSendBtn" class="footer-btn btn-logger-send" disabled>SEND LOG</button>
+  <div id="loggerRow1">
+    <button id="lockBtn">🔒 LOCK</button>
+    <div id="loggerStatus"><span id="loggerDot" class="ldot off"></span><span id="loggerLbl">LOGGER OFF</span></div>
+    <div id="loggerCount" class="logger-count">0 fixes</div>
+  </div>
+  <div id="loggerRow2">
+    <div id="loggerBtns">
+      <button id="loggerToggleBtn" class="footer-btn btn-logger-start">START LOG</button>
+      <button id="loggerSendBtn" class="footer-btn btn-logger-send" disabled>SEND LOG</button>
+      <button id="loggerDelBtn" class="footer-btn btn-logger-del" disabled>DEL LOG</button>
+    </div>
   </div>
 </footer>
 
@@ -1053,6 +1070,7 @@ function updateLogUI(n) {
   logCount = n;
   document.getElementById('loggerCount').textContent = n + ' fix' + (n === 1 ? '' : 'es');
   document.getElementById('loggerSendBtn').disabled = (n === 0);
+  document.getElementById('loggerDelBtn').disabled  = (n === 0);
 }
 
 function startLogger() {
@@ -1082,6 +1100,10 @@ function stopLogger() {
 
 document.getElementById('loggerToggleBtn').addEventListener('click', function() {
   if (loggerActive) stopLogger(); else startLogger();
+});
+
+document.getElementById('loggerDelBtn').addEventListener('click', function() {
+  document.getElementById('delLogModal').style.display='flex';
 });
 
 document.getElementById('loggerSendBtn').addEventListener('click', function() {
@@ -1180,5 +1202,15 @@ function fallbackSend(csv, gpx, kml, dateStr, email) {
   }, 500);
 }
 </script>
+<div id="delLogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);align-items:center;justify-content:center;z-index:300;padding:20px;">
+  <div style="background:var(--surface);border:1px solid rgba(255,107,53,0.4);border-radius:16px;padding:28px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:18px;">
+    <div style="font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:3px;color:var(--warn);text-align:center;">DELETE LOG?</div>
+    <div style="font-size:16px;color:var(--text);text-align:center;line-height:1.7;">This will permanently delete all recorded fixes. This cannot be undone.</div>
+    <div style="display:flex;gap:10px;">
+      <button onclick="document.getElementById('delLogModal').style.display='none';" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CANCEL</button>
+      <button onclick="document.getElementById('delLogModal').style.display='none'; clearLogFixes(function(){ updateLogUI(0); log('Log deleted','lerr'); });" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid rgba(255,107,53,0.6);background:rgba(255,107,53,0.1);color:var(--warn);cursor:pointer;">DELETE</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
