@@ -106,32 +106,6 @@ header {
 .dot.on   { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
 .dot.blink { background: var(--warn); animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0.15; } }
-@keyframes readyPulse { 0%,100% { box-shadow: 0 0 18px rgba(0,255,157,0.35); } 50% { box-shadow: 0 0 38px rgba(0,255,157,0.75); } }
-
-/* ── Ready-to-dive banner ── */
-#readyBanner {
-  display: none;
-  align-items: center; justify-content: center; gap: 12px;
-  padding: 11px 16px;
-  background: rgba(0,255,157,0.07);
-  border-bottom: 1px solid rgba(0,255,157,0.3);
-  animation: readyPulse 2s ease-in-out infinite;
-  flex-shrink: 0;
-}
-#readyBanner.show { display: flex; }
-.ready-dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--accent2); box-shadow: 0 0 8px var(--accent2);
-  flex-shrink: 0;
-}
-.ready-text {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 13px; letter-spacing: 2.5px; color: var(--accent2);
-}
-.ready-sub {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 10px; color: rgba(0,255,157,0.55); letter-spacing: 1px;
-}
 
 /* ── Main ── */
 main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px; overflow-y: auto; }
@@ -667,20 +641,12 @@ footer#loggerFooter {
   <button id="instrBtn">📖 INFO</button>
 </header>
 
-<div id="readyBanner">
-  <div class="ready-dot"></div>
-  <div>
-    <div class="ready-text">✓ READY TO DIVE</div>
-    <div class="ready-sub">GPS LOCKED · CLOSE THE BOX</div>
-  </div>
-</div>
-
 <div id="instrModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.80);display:flex;align-items:center;justify-content:center;z-index:300;padding:20px;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px 20px;width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;">
     <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:3px;color:var(--accent);text-align:center;">INSTRUCTIONS</div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;">Name your waypoints and enter coords (by SET HERE and COORDS)</div>
     <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-top:4px;">At the dive site:</div>
-    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">1.</span> Wait for the <span style="color:var(--accent2);">READY TO DIVE</span> banner to appear — this means GPS has a solid fix (±15m or better held for 5 seconds).</div>
+    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">1.</span> Wait for the banner to read <span style="color:var(--accent2);">● LIVE</span> with a good accuracy (±15m or better) — this means GPS has a genuine fresh fix.</div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">2.</span> SET:</div>
     <div style="font-size:18px;line-height:2;padding-left:18px;">
       <div><span style="color:var(--warn);font-weight:700;">✕ NO</span> Airplane Mode</div>
@@ -744,10 +710,6 @@ footer#loggerFooter {
 var myPos = null;            // best CURRENT (accepted, possibly stale) position used for nav
 var modalIdx = -1;
 var lastLogTime = 0;
-var readyGoodSince = null;   // timestamp when accuracy first hit <=15m
-var readyShown = false;      // banner already shown this session
-var READY_ACC = 15;          // accuracy threshold in metres
-var READY_HOLD = 5000;       // must hold for 5 seconds
 
 // ── Fix-quality filtering ──
 var GOOD_ACC   = 30;         // metres: fixes worse than this are NOT trusted for nav
@@ -979,7 +941,6 @@ function absorbEvent(e) {
 function enterDiveLock() {
   diveLocked = true;
   document.getElementById('diveLockShield').style.display = 'block';
-  document.getElementById('readyBanner').classList.remove('show');
   var btn = document.getElementById('lockBtn');
   btn.textContent = '🔓 UNLOCK';
   btn.classList.add('locked');
@@ -1480,25 +1441,6 @@ function onPos(p) {
       smoothed: goodFixes.length > 1,
       fixTs: fixTs
     };
-
-    // ── Ready-to-dive banner logic ──
-    if (!readyShown) {
-      if (acc <= READY_ACC) {
-        if (!readyGoodSince) readyGoodSince = now;
-        if (now - readyGoodSince >= READY_HOLD) {
-          document.getElementById('readyBanner').classList.add('show');
-          readyShown = true;
-          log('GPS ready — safe to close box', 'lok');
-        }
-      } else {
-        readyGoodSince = null; // accuracy slipped, reset hold timer
-      }
-    }
-  } else if (!genuine) {
-    // replayed/cached fix — never reset the ready timer based on garbage
-  } else {
-    // genuine but poor accuracy — reset the ready hold timer
-    readyGoodSince = null;
   }
 
   evaluateFreeze();
