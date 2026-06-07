@@ -45,6 +45,7 @@
   --accent: #00d4ff;
   --accent2: #00ff9d;
   --warn: #ff6b35;
+  --danger: #ff2d4b;
   --text: #c8dce8;
   --muted: #4a6070;
   --border: rgba(0,212,255,0.15);
@@ -225,6 +226,30 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 .data-val.unset { font-size: 32px; color: var(--muted); letter-spacing: 0; }
 .data-val.stale { color: var(--warn); opacity: 0.7; }
 .stale-sub { color: var(--warn) !important; }
+
+/* ── Fix freshness banner (readable through the box lid) ── */
+#freshBanner {
+  display: none; margin: 0 0 14px; padding: 14px 16px;
+  border-radius: 12px; border: 2px solid var(--muted);
+  background: var(--surface); text-align: center;
+  font-family: 'Share Tech Mono', monospace;
+}
+#freshBanner.show { display: block; }
+.fresh-state { font-size: 30px; font-weight: 700; letter-spacing: 3px; line-height: 1.1; color: var(--muted); }
+.fresh-sub   { margin-top: 5px; font-size: 16px; letter-spacing: 1px; color: var(--muted); }
+#freshBanner.live   { border-color: var(--accent2); background: rgba(0,255,157,0.10); }
+#freshBanner.live .fresh-state { color: var(--accent2); }
+#freshBanner.live .fresh-sub   { color: var(--accent2); }
+#freshBanner.aging  { border-color: var(--warn); background: rgba(255,107,53,0.12); }
+#freshBanner.aging .fresh-state { color: var(--warn); }
+#freshBanner.aging .fresh-sub   { color: var(--warn); }
+#freshBanner.stale, #freshBanner.cached {
+  border-color: var(--danger); background: rgba(255,45,75,0.16);
+  animation: freshPulse 1.1s infinite;
+}
+#freshBanner.stale .fresh-state, #freshBanner.cached .fresh-state { color: var(--danger); }
+#freshBanner.stale .fresh-sub,   #freshBanner.cached .fresh-sub   { color: var(--danger); }
+@keyframes freshPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 .data-unit {
   font-family: 'Share Tech Mono', monospace;
   font-size: 16px; color: var(--muted);
@@ -668,6 +693,11 @@ footer#loggerFooter {
 </div>
 
 <main id="mainContent">
+  <!-- Fix freshness — the first thing visible through the box lid -->
+  <div id="freshBanner">
+    <div class="fresh-state" id="freshState">NO FIX</div>
+    <div class="fresh-sub" id="freshSub">waiting for GPS…</div>
+  </div>
   <div id="wpContainer"></div>
   <!-- GPS Accuracy Panel -->
   <div id="gpsAccPanel">
@@ -725,6 +755,31 @@ var STALE_MS   = 20000;      // ms: a good fix older than this is flagged "stale
 var lastGoodTime = 0;        // timestamp of the last accepted (<=GOOD_ACC) fix
 var rawAcc = null;           // most recent raw accuracy from iOS (for the accuracy panel)
 var rawPos = null;           // most recent RAW position from iOS (for the diagnostic logger)
+
+// ── Fix freshness & "pulled underwater" detection ──
+// Workflow: the box is sent UP on a reel, sits on the surface acquiring fixes,
+// then pulled back DOWN. The descent + glancing at the screen can take 30–60s,
+// during which GPS has already lost signal and the last surface fix is frozen
+// on screen. That frozen fix is EXACTLY what we want to read — its age at read
+// time is irrelevant. What matters is whether the data in the segment JUST
+// BEFORE signal-loss was a genuine live fix or iOS replaying cached/old data.
+//
+// "Genuine live fix" = computed recently (position.timestamp ≈ now) AND the
+// coordinates are actually moving (a real fix always jitters; byte-identical
+// coords across callbacks = iOS replaying one cached fix). The reported ±acc
+// describes the OLD fix when replayed, which is how ±32m can be 100m off.
+var FRESH_MS      = 10000;   // ms: timestamp within this of arrival = freshly computed
+var FROZEN_LIMIT  = 3;       // identical-coordinate callbacks in a row = replay
+var FREEZE_GAP    = 4000;    // ms: no new callback this long = signal lost (underwater)
+var RECENT_WINDOW = 30000;   // ms: a genuine fix this recently before freeze ⇒ held fix is trustworthy
+var GREEN_AGE     = 120000;  // ms: held good fix older than this ⇒ amber "verify" (still usable)
+
+var prevRawLat = null, prevRawLon = null;
+var frozenCount = 0;         // consecutive byte-identical-coordinate callbacks
+var lastArrival = 0;         // wall-clock of the last onPos callback (any fix)
+var lastGenuine = null;      // {arrival, fixTs, acc} of last GENUINE live good fix
+var held = null;             // frozen verdict once signal lost; null while live
+var lastStaleLog = 0;        // throttle for the diagnostic "replayed fix" log line
 
 // ── Median smoothing buffer (recent good fixes) ──
 var MEDIAN_WINDOW = 5;       // number of recent good fixes to median together
@@ -1144,27 +1199,31 @@ function updateDataCells(i, wp) {
   if (!el) return;
 
   var distHTML, bearHTML;
-  var now = Date.now();
-  var stale = myPos && (now - lastGoodTime > STALE_MS);
-  var fixAge = Math.round((now - lastGoodTime) / 1000);
+  var s = navState();
+  var suspect = (s.state === 'cached');       // only the replayed-cache case is untrustworthy
+  var noteTxt = s.state === 'cached' ? '\u26a0 CACHED'
+              : s.state === 'verify' ? 'surface fix · ' + s.ageS + 's — verify'
+              : s.state === 'heldgood' ? 'surface fix · ' + s.ageS + 's ago'
+              : '';
 
   if (wp.lat !== null && myPos) {
     var dist = haversine(myPos.lat, myPos.lon, wp.lat, wp.lon);
     var trueBear = bearing(myPos.lat, myPos.lon, wp.lat, wp.lon);
     var magBear = trueTomag(trueBear, myPos.lat, myPos.lon);
     var d = fmtDist(dist);
-    var valClass = stale ? 'data-val stale' : 'data-val';
+    var valClass = suspect ? 'data-val stale' : 'data-val';
+    var subClass = suspect ? 'data-sub stale-sub' : 'data-sub';
     distHTML =
       '<div class="wp-data-cell">'+
         '<div class="data-label">Distance</div>'+
         '<div class="'+valClass+'">'+d.v+'<span class="data-unit-inline">'+d.u+'</span></div>'+
-        (stale ? '<div class="data-sub stale-sub">⚠ STALE '+fixAge+'s</div>' : '')+
+        (noteTxt ? '<div class="'+subClass+'">'+noteTxt+'</div>' : '')+
       '</div>';
     bearHTML =
       '<div class="wp-data-cell">'+
         '<div class="data-label">Mag. Bearing</div>'+
         '<div class="'+valClass+'">'+Math.round(magBear)+'°</div>'+
-        '<div class="data-sub'+(stale?' stale-sub':'')+'">'+cardDir(magBear)+(stale?' · OLD':'')+'</div>'+
+        '<div class="data-sub'+(suspect?' stale-sub':'')+'">'+cardDir(magBear)+(suspect?' · OLD':'')+'</div>'+
       '</div>';
   } else if (wp.lat !== null && !myPos) {
     distHTML = '<div class="wp-data-cell"><div class="data-label">Distance</div><div class="data-val unset">No fix</div></div>';
@@ -1178,7 +1237,79 @@ function updateDataCells(i, wp) {
 }
 
 function refreshData() {
+  evaluateFreeze();
   wps.forEach(function(wp, i) { updateDataCells(i, wp); });
+  updateFreshnessBanner();
+}
+
+// Detect the "pulled underwater / signal lost" event and freeze a verdict on
+// the quality of the data segment that preceded it. Called on every fix and on
+// the 1s tick (so a total loss of callbacks is caught too).
+function evaluateFreeze() {
+  if (!gpsStarted) return;
+  var now = Date.now();
+  var inReplayRun = frozenCount >= FROZEN_LIMIT;          // iOS replaying one fix
+  var gap = lastArrival && (now - lastArrival > FREEZE_GAP); // callbacks stopped
+  var signalLost = inReplayRun || gap;
+
+  if (signalLost) {
+    if (!held) {
+      // Transition live → frozen: snapshot the verdict NOW and hold it.
+      var hadRecentGenuine = lastGenuine && (now - lastGenuine.arrival <= RECENT_WINDOW);
+      held = {
+        good: !!(hadRecentGenuine && myPos),
+        acc:  myPos ? myPos.acc : (lastGenuine ? lastGenuine.acc : null),
+        fixTs: lastGenuine ? lastGenuine.fixTs : (myPos ? myPos.fixTs : now),
+        reason: inReplayRun ? 'replay' : 'gap'
+      };
+      log(held.good
+        ? 'Signal lost — holding surface fix ±' + Math.round(held.acc) + 'm'
+        : 'Signal lost — no genuine surface fix this surfacing (cached data)', held.good ? 'lok' : 'lerr');
+    }
+  } else {
+    // Genuine live data flowing again (box back on surface) — release the hold.
+    if (held) { held = null; log('Live fix re-acquired', 'lok'); }
+  }
+}
+
+// Current navigation state used by the banner and the waypoint cells.
+function navState() {
+  if (held) {
+    var ageS = held.fixTs ? Math.max(0, Math.round((Date.now() - held.fixTs) / 1000)) : null;
+    if (!held.good) return { state: 'cached', ageS: ageS };
+    return { state: (held.fixTs && Date.now() - held.fixTs > GREEN_AGE) ? 'verify' : 'heldgood', ageS: ageS };
+  }
+  if (!myPos) return { state: 'acquiring', ageS: null };
+  return { state: 'live', ageS: 0 };
+}
+
+function updateFreshnessBanner() {
+  var b = document.getElementById('freshBanner');
+  if (!b) return;
+  if (!gpsStarted) { b.className = ''; return; }
+  var s = navState();
+  var stateEl = document.getElementById('freshState');
+  var subEl   = document.getElementById('freshSub');
+  var accTxt  = myPos ? '\xb1' + Math.round(myPos.acc) + 'm' : '';
+  // Map internal states to CSS classes (green / amber / red)
+  var cls = { acquiring:'none', live:'live', heldgood:'live', verify:'aging', cached:'cached' }[s.state];
+  b.className = 'show ' + cls;
+  if (s.state === 'acquiring') {
+    stateEl.textContent = 'ACQUIRING';
+    subEl.textContent   = 'waiting for first live fix…';
+  } else if (s.state === 'live') {
+    stateEl.textContent = '\u25cf LIVE';
+    subEl.textContent   = accTxt + ' · on surface, acquiring';
+  } else if (s.state === 'heldgood') {
+    stateEl.textContent = '\u2713 SURFACE FIX';
+    subEl.textContent   = '\xb1' + Math.round(held.acc) + 'm · captured ' + s.ageS + 's ago';
+  } else if (s.state === 'verify') {
+    stateEl.textContent = '\u2713 SURFACE FIX';
+    subEl.textContent   = '\xb1' + Math.round(held.acc) + 'm · ' + s.ageS + 's old — verify';
+  } else { // cached
+    stateEl.textContent = '\u26a0 NO REAL FIX';
+    subEl.textContent   = 'iOS replayed cache · resurface for a live fix';
+  }
 }
 
 // ── Rename waypoint ──
@@ -1193,11 +1324,15 @@ function renameWP(i, el) {
 // ── Set here / clear ──
 function setHere(i) {
   if (!myPos) { log('No good GPS fix yet — wait for ≤'+GOOD_ACC+'m', 'lerr'); return; }
-  var stale = (Date.now() - lastGoodTime > STALE_MS);
+  var s = navState();
   wps[i].lat = myPos.lat;
   wps[i].lon = myPos.lon;
-  if (stale) log('WP'+(i+1)+' set from STALE fix ±'+Math.round(myPos.acc)+'m — verify!', 'lerr');
-  else       log('WP'+(i+1)+' set ±'+Math.round(myPos.acc)+'m'+(myPos.smoothed?' (smoothed)':''), 'lok');
+  if (s.state === 'cached')
+    log('WP'+(i+1)+' set from CACHED data — iOS gave no live fix, verify!', 'lerr');
+  else if (s.state === 'verify')
+    log('WP'+(i+1)+' set from a '+s.ageS+'s-old surface fix ±'+Math.round(myPos.acc)+'m — verify', 'lerr');
+  else
+    log('WP'+(i+1)+' set ±'+Math.round(myPos.acc)+'m'+(myPos.smoothed?' (smoothed)':''), 'lok');
   saveWPs(); render();
 }
 function deleteWP(i) {
@@ -1275,23 +1410,60 @@ function onPos(p) {
   var now = Date.now();
   var acc = p.coords.accuracy;
   rawAcc = acc;
-  rawPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: acc };
+
+  // ── True fix age via position.timestamp ──
+  // iOS may hand back a CACHED fix even with maximumAge:0. When it does the
+  // callback fires "now" but p.timestamp stays at the original capture time,
+  // and the reported accuracy describes that OLD fix. This is the only
+  // reliable web signal that separates a genuine fresh fix from replayed data.
+  var fixTs = (typeof p.timestamp === 'number' && p.timestamp > 0) ? p.timestamp : now;
+  var fixAgeMs = now - fixTs;
+  lastArrival = now;
+
+  // ── Frozen-coordinate detection ──
+  // A live GPS fix always jitters slightly, even stationary. Byte-identical
+  // coordinates across consecutive callbacks = iOS replaying one cached fix
+  // (sometimes even re-stamped as "now", so the timestamp alone can't catch it).
+  if (prevRawLat !== null && p.coords.latitude === prevRawLat && p.coords.longitude === prevRawLon) {
+    frozenCount++;
+  } else {
+    frozenCount = 0;
+  }
+  prevRawLat = p.coords.latitude;
+  prevRawLon = p.coords.longitude;
+  var inReplayRun = frozenCount >= FROZEN_LIMIT;
+
+  // A fix is GENUINE only if it was computed recently AND it isn't part of a
+  // replay run. This is what we trust for navigation and for the held verdict.
+  var freshByTime = fixAgeMs <= FRESH_MS;
+  var genuine = freshByTime && !inReplayRun;
+
+  rawPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: acc, fixTs: fixTs };
 
   // Accuracy panel always reflects the RAW reading from iOS
   document.getElementById('dot').className = 'dot on';
   document.getElementById('gpsLbl').textContent = '±'+Math.round(acc)+'m';
   pushAccuracy(acc);
 
+  // Flag a replayed / old-timestamp fix in the log so it's diagnosable later
+  if (!genuine && now - lastStaleLog > 5000) {
+    log('iOS served ' + (inReplayRun ? 'a FROZEN' : 'an OLD') + ' fix (' +
+        Math.round(fixAgeMs/1000) + 's old) — not a live fix', 'lerr');
+    lastStaleLog = now;
+  }
+
   if (now - lastLogTime > 5000) {
-    log('GPS fix ±'+Math.round(acc)+'m', 'lok');
+    log('GPS fix ±'+Math.round(acc)+'m'+(genuine?'':' [replay]'), genuine ? 'lok' : 'linf');
     lastLogTime = now;
   }
 
-  // ── Reject poor fixes for navigation ──
-  // Anything worse than GOOD_ACC is ignored for nav; we keep showing the last
-  // good position (flagged stale) rather than displaying misleading numbers.
-  if (acc <= GOOD_ACC) {
+  // ── Accept only GENUINE good fixes for navigation ──
+  // A replayed fix (old timestamp or frozen coords) never updates myPos, so the
+  // held position stays pinned to the last real surface fix instead of drifting
+  // onto stale cache with a deceptively confident accuracy.
+  if (genuine && acc <= GOOD_ACC) {
     lastGoodTime = now;
+    lastGenuine = { arrival: now, fixTs: fixTs, acc: acc };
 
     // add to median buffer, prune stale entries
     goodFixes.push({ ts: now, lat: p.coords.latitude, lon: p.coords.longitude, acc: acc });
@@ -1305,7 +1477,8 @@ function onPos(p) {
       lat: median(lats),
       lon: median(lons),
       acc: acc,
-      smoothed: goodFixes.length > 1
+      smoothed: goodFixes.length > 1,
+      fixTs: fixTs
     };
 
     // ── Ready-to-dive banner logic ──
@@ -1321,11 +1494,14 @@ function onPos(p) {
         readyGoodSince = null; // accuracy slipped, reset hold timer
       }
     }
+  } else if (!genuine) {
+    // replayed/cached fix — never reset the ready timer based on garbage
   } else {
-    // poor fix — do not update myPos; reset the ready hold timer
+    // genuine but poor accuracy — reset the ready hold timer
     readyGoodSince = null;
   }
 
+  evaluateFreeze();
   refreshData();
 }
 function onErr(e) {
