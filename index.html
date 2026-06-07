@@ -775,11 +775,9 @@ function drawSparkline() {
   var ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  // background
+  // background (roundRect not available before iOS 16, use fillRect)
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.beginPath();
-  ctx.roundRect(0, 0, W, H, 4);
-  ctx.fill();
+  ctx.fillRect(0, 0, W, H);
 
   if (accHistory.length < 2) {
     ctx.fillStyle = 'rgba(74,96,112,0.5)';
