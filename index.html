@@ -223,6 +223,8 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   letter-spacing: -1px;
 }
 .data-val.unset { font-size: 32px; color: var(--muted); letter-spacing: 0; }
+.data-val.stale { color: var(--warn); opacity: 0.7; }
+.stale-sub { color: var(--warn) !important; }
 .data-unit {
   font-family: 'Share Tech Mono', monospace;
   font-size: 16px; color: var(--muted);
@@ -709,13 +711,32 @@ footer#loggerFooter {
 </footer>
 
 <script>
-var myPos = null;
+var myPos = null;            // best CURRENT (accepted, possibly stale) position used for nav
 var modalIdx = -1;
 var lastLogTime = 0;
 var readyGoodSince = null;   // timestamp when accuracy first hit <=15m
 var readyShown = false;      // banner already shown this session
 var READY_ACC = 15;          // accuracy threshold in metres
 var READY_HOLD = 5000;       // must hold for 5 seconds
+
+// ── Fix-quality filtering ──
+var GOOD_ACC   = 30;         // metres: fixes worse than this are NOT trusted for nav
+var STALE_MS   = 20000;      // ms: a good fix older than this is flagged "stale"
+var lastGoodTime = 0;        // timestamp of the last accepted (<=GOOD_ACC) fix
+var rawAcc = null;           // most recent raw accuracy from iOS (for the accuracy panel)
+var rawPos = null;           // most recent RAW position from iOS (for the diagnostic logger)
+
+// ── Median smoothing buffer (recent good fixes) ──
+var MEDIAN_WINDOW = 5;       // number of recent good fixes to median together
+var MEDIAN_MAX_AGE = 12000;  // ms: ignore good fixes older than this when smoothing
+var goodFixes = [];          // [{ts, lat, lon, acc}]
+var gpsStarted = false;      // becomes true once startGPS() has run
+
+function median(arr) {
+  var a = arr.slice().sort(function(x, y){ return x - y; });
+  var m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m-1] + a[m]) / 2;
+}
 
 // ── GPS Accuracy History (5-min rolling window) ──
 var ACC_WINDOW = 5 * 60 * 1000; // 5 minutes in ms
@@ -883,7 +904,12 @@ async function requestWakeLock() {
   } catch(e) {}
 }
 document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'visible') requestWakeLock();
+  if (document.visibilityState === 'visible') {
+    requestWakeLock();
+    // Page came back to foreground (e.g. screen turned on after surfacing).
+    // Force a fresh acquisition so we don't sit on a stale cached fix.
+    if (typeof gpsStarted !== 'undefined' && gpsStarted) rekickGPS();
+  }
 });
 
 // ── Dive Lock ──
@@ -1118,22 +1144,27 @@ function updateDataCells(i, wp) {
   if (!el) return;
 
   var distHTML, bearHTML;
+  var now = Date.now();
+  var stale = myPos && (now - lastGoodTime > STALE_MS);
+  var fixAge = Math.round((now - lastGoodTime) / 1000);
 
   if (wp.lat !== null && myPos) {
     var dist = haversine(myPos.lat, myPos.lon, wp.lat, wp.lon);
     var trueBear = bearing(myPos.lat, myPos.lon, wp.lat, wp.lon);
     var magBear = trueTomag(trueBear, myPos.lat, myPos.lon);
     var d = fmtDist(dist);
+    var valClass = stale ? 'data-val stale' : 'data-val';
     distHTML =
       '<div class="wp-data-cell">'+
         '<div class="data-label">Distance</div>'+
-        '<div class="data-val">'+d.v+'<span class="data-unit-inline">'+d.u+'</span></div>'+
+        '<div class="'+valClass+'">'+d.v+'<span class="data-unit-inline">'+d.u+'</span></div>'+
+        (stale ? '<div class="data-sub stale-sub">⚠ STALE '+fixAge+'s</div>' : '')+
       '</div>';
     bearHTML =
       '<div class="wp-data-cell">'+
         '<div class="data-label">Mag. Bearing</div>'+
-        '<div class="data-val">'+Math.round(magBear)+'°</div>'+
-        '<div class="data-sub">'+cardDir(magBear)+'</div>'+
+        '<div class="'+valClass+'">'+Math.round(magBear)+'°</div>'+
+        '<div class="data-sub'+(stale?' stale-sub':'')+'">'+cardDir(magBear)+(stale?' · OLD':'')+'</div>'+
       '</div>';
   } else if (wp.lat !== null && !myPos) {
     distHTML = '<div class="wp-data-cell"><div class="data-label">Distance</div><div class="data-val unset">No fix</div></div>';
@@ -1161,10 +1192,12 @@ function renameWP(i, el) {
 
 // ── Set here / clear ──
 function setHere(i) {
-  if (!myPos) { log('No GPS fix yet', 'lerr'); return; }
+  if (!myPos) { log('No good GPS fix yet — wait for ≤'+GOOD_ACC+'m', 'lerr'); return; }
+  var stale = (Date.now() - lastGoodTime > STALE_MS);
   wps[i].lat = myPos.lat;
   wps[i].lon = myPos.lon;
-  log('WP'+(i+1)+' set ±'+Math.round(myPos.acc)+'m', 'lok');
+  if (stale) log('WP'+(i+1)+' set from STALE fix ±'+Math.round(myPos.acc)+'m — verify!', 'lerr');
+  else       log('WP'+(i+1)+' set ±'+Math.round(myPos.acc)+'m'+(myPos.smoothed?' (smoothed)':''), 'lok');
   saveWPs(); render();
 }
 function deleteWP(i) {
@@ -1213,37 +1246,86 @@ document.getElementById('addBtn').addEventListener('click', function() {
 });
 
 // ── GPS ──
+var _watchId = null;
+var _staleTick = null;
 function startGPS() {
   if (!navigator.geolocation) { log('Geolocation not supported', 'lerr'); return; }
+  gpsStarted = true;
   log('Requesting GPS… ('+location.protocol+'//'+location.host+')', 'linf');
+  // maximumAge:0 everywhere — never accept a cached position from iOS
   var opts = { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 };
   navigator.geolocation.getCurrentPosition(onPos, onErr, opts);
-  navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
+  if (_watchId !== null) { try { navigator.geolocation.clearWatch(_watchId); } catch(e){} }
+  _watchId = navigator.geolocation.watchPosition(onPos, onErr, opts);
+  // Refresh the UI every second so the STALE countdown updates even when no
+  // new fix is arriving (the whole point — to warn when data is going old).
+  if (_staleTick === null) _staleTick = setInterval(refreshData, 1000);
 }
+
+// Re-kick the watch — call after surfacing / page becoming visible so iOS
+// re-acquires immediately instead of serving stale cached fixes.
+function rekickGPS() {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(onPos, onErr, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  if (_watchId !== null) { try { navigator.geolocation.clearWatch(_watchId); } catch(e){} }
+  _watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+}
+
 function onPos(p) {
-  myPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
-  document.getElementById('dot').className = 'dot on';
-  document.getElementById('gpsLbl').textContent = '±'+Math.round(p.coords.accuracy)+'m';
   var now = Date.now();
+  var acc = p.coords.accuracy;
+  rawAcc = acc;
+  rawPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: acc };
+
+  // Accuracy panel always reflects the RAW reading from iOS
+  document.getElementById('dot').className = 'dot on';
+  document.getElementById('gpsLbl').textContent = '±'+Math.round(acc)+'m';
+  pushAccuracy(acc);
+
   if (now - lastLogTime > 5000) {
-    log('GPS fix ±'+Math.round(p.coords.accuracy)+'m', 'lok');
+    log('GPS fix ±'+Math.round(acc)+'m', 'lok');
     lastLogTime = now;
   }
-  // ── Update accuracy panel ──
-  pushAccuracy(p.coords.accuracy);
-  // ── Ready-to-dive banner logic ──
-  if (!readyShown) {
-    if (p.coords.accuracy <= READY_ACC) {
-      if (!readyGoodSince) readyGoodSince = now;
-      if (now - readyGoodSince >= READY_HOLD) {
-        document.getElementById('readyBanner').classList.add('show');
-        readyShown = true;
-        log('GPS ready — safe to close box', 'lok');
+
+  // ── Reject poor fixes for navigation ──
+  // Anything worse than GOOD_ACC is ignored for nav; we keep showing the last
+  // good position (flagged stale) rather than displaying misleading numbers.
+  if (acc <= GOOD_ACC) {
+    lastGoodTime = now;
+
+    // add to median buffer, prune stale entries
+    goodFixes.push({ ts: now, lat: p.coords.latitude, lon: p.coords.longitude, acc: acc });
+    while (goodFixes.length && now - goodFixes[0].ts > MEDIAN_MAX_AGE) goodFixes.shift();
+    if (goodFixes.length > MEDIAN_WINDOW) goodFixes.splice(0, goodFixes.length - MEDIAN_WINDOW);
+
+    // median of recent good fixes — robust against single-sample jumps
+    var lats = goodFixes.map(function(f){ return f.lat; });
+    var lons = goodFixes.map(function(f){ return f.lon; });
+    myPos = {
+      lat: median(lats),
+      lon: median(lons),
+      acc: acc,
+      smoothed: goodFixes.length > 1
+    };
+
+    // ── Ready-to-dive banner logic ──
+    if (!readyShown) {
+      if (acc <= READY_ACC) {
+        if (!readyGoodSince) readyGoodSince = now;
+        if (now - readyGoodSince >= READY_HOLD) {
+          document.getElementById('readyBanner').classList.add('show');
+          readyShown = true;
+          log('GPS ready — safe to close box', 'lok');
+        }
+      } else {
+        readyGoodSince = null; // accuracy slipped, reset hold timer
       }
-    } else {
-      readyGoodSince = null; // accuracy slipped, reset hold timer
     }
+  } else {
+    // poor fix — do not update myPos; reset the ready hold timer
+    readyGoodSince = null;
   }
+
   refreshData();
 }
 function onErr(e) {
@@ -1277,14 +1359,14 @@ var loggerInterval = null;
 var logCount = 0;
 
 function saveLogFix() {
-  if (!myPos) return;
+  if (!rawPos) return;
   if (!_db) return;
   try {
     var fix = {
       ts: new Date().toISOString(),
-      lat: myPos.lat,
-      lon: myPos.lon,
-      acc: myPos.acc
+      lat: rawPos.lat,
+      lon: rawPos.lon,
+      acc: rawPos.acc
     };
     var tx = _db.transaction(LOG_STORE, 'readwrite');
     tx.objectStore(LOG_STORE).add(fix);
