@@ -237,6 +237,83 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   letter-spacing: 1px; margin-top: 2px;
 }
 
+/* ── GPS Accuracy Panel ── */
+#gpsAccPanel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  margin-bottom: 10px;
+}
+#gpsAccPanel::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+}
+.acc-top {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 4px 16px 0;
+  gap: 8px;
+}
+.acc-label-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.acc-pulse-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+  transition: background 0.4s, box-shadow 0.4s;
+}
+.acc-pulse-dot.good { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+.acc-pulse-dot.bad  { background: var(--warn);    box-shadow: 0 0 8px var(--warn); }
+.acc-meta {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--muted); letter-spacing: 1px;
+  padding-bottom: 4px;
+  text-align: right;
+}
+.acc-number-row {
+  display: flex; align-items: baseline; gap: 4px;
+  padding: 0 16px 0;
+}
+.acc-number {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 72px; font-weight: 700; line-height: 1;
+  letter-spacing: -2px;
+  color: var(--text);
+  transition: color 0.5s;
+}
+.acc-number.good { color: var(--accent2); }
+.acc-number.bad  { color: var(--warn); }
+.acc-unit {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 28px; color: var(--muted);
+  letter-spacing: 0;
+}
+.acc-sublabel {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; letter-spacing: 2px; color: var(--muted);
+  padding: 0 16px 6px;
+  text-transform: uppercase;
+}
+/* sparkline */
+.acc-graph-wrap {
+  padding: 4px 14px 12px;
+  position: relative;
+}
+.acc-graph-title {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px; letter-spacing: 2px; color: var(--muted);
+  margin-bottom: 4px;
+  display: flex; justify-content: space-between;
+}
+#accSparkline {
+  display: block;
+  width: 100%; height: 54px;
+  border-radius: 6px;
+}
+
 /* ── Add button ── */
 .btn-add {
   width: 100%; padding: 14px;
@@ -590,6 +667,28 @@ footer#loggerFooter {
 
 <main id="mainContent">
   <div id="wpContainer"></div>
+  <!-- GPS Accuracy Panel -->
+  <div id="gpsAccPanel">
+    <div class="acc-top">
+      <div class="acc-label-row">
+        <div class="acc-pulse-dot" id="accDot"></div>
+      </div>
+      <div class="acc-meta" id="accMeta">GPS ACCURACY</div>
+    </div>
+    <div class="acc-number-row">
+      <div class="acc-number" id="accNumber">—</div>
+      <div class="acc-unit" id="accUnitEl">m</div>
+    </div>
+    <div class="acc-sublabel">GPS ACCURACY</div>
+    <div class="acc-graph-wrap">
+      <div class="acc-graph-title">
+        <span>5 MIN TREND</span>
+        <span id="accGraphScale"></span>
+      </div>
+      <canvas id="accSparkline"></canvas>
+    </div>
+  </div>
+
   <button class="btn-add" id="addBtn">+ ADD WAYPOINT</button>
   <div id="log"><span class="linf">Tap START…</span></div>
 </main>
@@ -617,6 +716,164 @@ var readyGoodSince = null;   // timestamp when accuracy first hit <=15m
 var readyShown = false;      // banner already shown this session
 var READY_ACC = 15;          // accuracy threshold in metres
 var READY_HOLD = 5000;       // must hold for 5 seconds
+
+// ── GPS Accuracy History (5-min rolling window) ──
+var ACC_WINDOW = 5 * 60 * 1000; // 5 minutes in ms
+var accHistory = []; // [{ts, acc}]
+
+function pushAccuracy(acc) {
+  var now = Date.now();
+  accHistory.push({ ts: now, acc: acc });
+  // prune older than 5 min
+  var cutoff = now - ACC_WINDOW;
+  while (accHistory.length > 0 && accHistory[0].ts < cutoff) accHistory.shift();
+  updateAccPanel(acc, now);
+  drawSparkline();
+}
+
+function updateAccPanel(acc, now) {
+  var numEl   = document.getElementById('accNumber');
+  var dotEl   = document.getElementById('accDot');
+  var metaEl  = document.getElementById('accMeta');
+  var unitEl  = document.getElementById('accUnitEl');
+  if (!numEl) return;
+
+  var rounded = Math.round(acc);
+  numEl.textContent = rounded;
+  unitEl.textContent = 'm';
+
+  // colour-code: green ≤15 m, amber ≤30, red >30
+  numEl.className = 'acc-number' + (acc <= 15 ? ' good' : acc <= 30 ? '' : ' bad');
+  dotEl.className = 'acc-pulse-dot' + (acc <= 15 ? ' good' : acc <= 30 ? '' : ' bad');
+
+  // meta: trend arrow + time since first sample
+  var trend = '';
+  if (accHistory.length >= 3) {
+    var recent = accHistory.slice(-3).reduce(function(s, x) { return s + x.acc; }, 0) / 3;
+    var older  = accHistory.slice(0, Math.min(3, accHistory.length - 3));
+    if (older.length > 0) {
+      var olderAvg = older.reduce(function(s, x) { return s + x.acc; }, 0) / older.length;
+      trend = (recent < olderAvg - 1) ? ' ▼ IMPROVING' : (recent > olderAvg + 1) ? ' ▲ DEGRADING' : ' ≈ STABLE';
+    }
+  }
+  var age = accHistory.length > 1
+    ? Math.floor((now - accHistory[0].ts) / 1000) + 's DATA'
+    : 'GPS ACCURACY';
+  metaEl.textContent = age + trend;
+}
+
+function drawSparkline() {
+  var canvas = document.getElementById('accSparkline');
+  if (!canvas) return;
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.offsetWidth || canvas.parentElement.offsetWidth - 28;
+  var H = 54;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // background
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, W, H, 4);
+  ctx.fill();
+
+  if (accHistory.length < 2) {
+    ctx.fillStyle = 'rgba(74,96,112,0.5)';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('collecting data…', W / 2, H / 2 + 4);
+    document.getElementById('accGraphScale').textContent = '';
+    return;
+  }
+
+  var now = Date.now();
+  var tMin = now - ACC_WINDOW;
+  var maxAcc = Math.max.apply(null, accHistory.map(function(x) { return x.acc; }));
+  var minAcc = Math.min.apply(null, accHistory.map(function(x) { return x.acc; }));
+  // pad range
+  var range = Math.max(maxAcc - minAcc, 5);
+  var top = maxAcc + range * 0.15;
+  var bot = Math.max(0, minAcc - range * 0.1);
+
+  // update scale label
+  document.getElementById('accGraphScale').textContent =
+    Math.round(bot) + '–' + Math.round(top) + ' m';
+
+  function tx(ts) { return ((ts - tMin) / ACC_WINDOW) * W; }
+  function ty(acc) { return H - ((acc - bot) / (top - bot)) * H; }
+
+  // grid lines at nice round values
+  var step = range > 200 ? 100 : range > 80 ? 50 : range > 30 ? 20 : range > 10 ? 10 : 5;
+  var gridStart = Math.ceil(bot / step) * step;
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.lineWidth = 1;
+  for (var g = gridStart; g <= top; g += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, ty(g));
+    ctx.lineTo(W, ty(g));
+    ctx.stroke();
+  }
+
+  // 1-min tick marks on x-axis
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  for (var m = 1; m <= 4; m++) {
+    var tx_m = (m / 5) * W;
+    ctx.beginPath();
+    ctx.moveTo(tx_m, 0);
+    ctx.lineTo(tx_m, H);
+    ctx.stroke();
+  }
+
+  // filled area under curve
+  var grad = ctx.createLinearGradient(0, 0, 0, H);
+  var lastAcc = accHistory[accHistory.length - 1].acc;
+  var lineColor = lastAcc <= 15 ? '0,255,157' : lastAcc <= 30 ? '0,212,255' : '255,107,53';
+  grad.addColorStop(0, 'rgba(' + lineColor + ',0.25)');
+  grad.addColorStop(1, 'rgba(' + lineColor + ',0.02)');
+
+  ctx.beginPath();
+  ctx.moveTo(tx(accHistory[0].ts), H);
+  ctx.lineTo(tx(accHistory[0].ts), ty(accHistory[0].acc));
+  for (var i = 1; i < accHistory.length; i++) {
+    var x0 = tx(accHistory[i-1].ts), y0 = ty(accHistory[i-1].acc);
+    var x1 = tx(accHistory[i].ts),   y1 = ty(accHistory[i].acc);
+    var cpx = (x0 + x1) / 2;
+    ctx.bezierCurveTo(cpx, y0, cpx, y1, x1, y1);
+  }
+  ctx.lineTo(tx(accHistory[accHistory.length - 1].ts), H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // line
+  ctx.beginPath();
+  ctx.moveTo(tx(accHistory[0].ts), ty(accHistory[0].acc));
+  for (var j = 1; j < accHistory.length; j++) {
+    var xa = tx(accHistory[j-1].ts), ya = ty(accHistory[j-1].acc);
+    var xb = tx(accHistory[j].ts),   yb = ty(accHistory[j].acc);
+    var cp = (xa + xb) / 2;
+    ctx.bezierCurveTo(cp, ya, cp, yb, xb, yb);
+  }
+  ctx.strokeStyle = 'rgba(' + lineColor + ',0.9)';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // dot at latest point
+  var lx = tx(accHistory[accHistory.length-1].ts);
+  var ly = ty(accHistory[accHistory.length-1].acc);
+  ctx.beginPath();
+  ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(' + lineColor + ',1)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
 
 // ── Wake Lock ──
 var wakeLock = null;
@@ -974,6 +1231,8 @@ function onPos(p) {
     log('GPS fix ±'+Math.round(p.coords.accuracy)+'m', 'lok');
     lastLogTime = now;
   }
+  // ── Update accuracy panel ──
+  pushAccuracy(p.coords.accuracy);
   // ── Ready-to-dive banner logic ──
   if (!readyShown) {
     if (p.coords.accuracy <= READY_ACC) {
@@ -1009,6 +1268,9 @@ document.getElementById('startBtn').addEventListener('click', function() {
   startGPS();
   requestWakeLock();
 });
+
+// Redraw sparkline on resize/orientation change
+window.addEventListener('resize', function() { drawSparkline(); });
 
 // ---- Data Logger ----
 var LOG_STORE = 'gpslog';
