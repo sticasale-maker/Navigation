@@ -1617,8 +1617,11 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
     var dateStr = new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');
     var TO_EMAIL = 'sticasale@gmail.com';
 
-    // ── Share via Web Share API (native iOS share sheet) ──
-    if (navigator.canShare) {
+    // ── Share via Web Share API (native iOS share sheet only) ──
+    // Android Gmail silently drops file attachments from Web Share intents,
+    // so fall straight through to the download+mailto fallback on Android.
+    var isAndroid = /Android/i.test(navigator.userAgent);
+    if (!isAndroid && navigator.canShare) {
       var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
       var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
       var kmlFile = new File([kml], 'divenav_' + dateStr + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
