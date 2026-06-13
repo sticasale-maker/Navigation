@@ -333,6 +333,15 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   background: transparent; color: var(--text); cursor: pointer;
 }
 .btn-add:active { background: rgba(0,212,255,0.05); }
+.btn-savemap {
+  width: 100%; padding: 14px; margin-top: 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 15px; letter-spacing: 2px;
+  border-radius: 10px; border: 1px solid rgba(0,255,157,0.45);
+  background: rgba(0,255,157,0.07); color: var(--accent2); cursor: pointer;
+}
+.btn-savemap:active { background: rgba(0,255,157,0.16); }
+.btn-savemap:disabled { opacity: 0.35; cursor: default; }
 
 /* ── Coord entry modal ── */
 #modal {
@@ -697,6 +706,7 @@ footer#loggerFooter {
   </div>
 
   <button class="btn-add" id="addBtn">+ ADD WAYPOINT</button>
+  <button class="btn-savemap" id="saveMapBtn">🗺 SAVE MAP</button>
   <div id="log"><span class="linf">Tap START…</span></div>
 </main>
 
@@ -1419,6 +1429,219 @@ document.getElementById('addBtn').addEventListener('click', function() {
   wps.push({ name: 'WP '+(wps.length+1), lat: null, lon: null });
   saveWPs(); render();
 });
+
+// ── Save a map image: waypoints plotted + connected in sequence ──
+// Self-contained PNG drawn on a <canvas> (no network/tiles needed offshore).
+// Points are projected to a local equirectangular plane (true shape/scale),
+// connected by segments in waypoint order, labelled with names, coords and
+// per-leg distances, then saved to the device (share sheet → Photos on iOS,
+// download fallback elsewhere).
+function saveWaypointMap() {
+  var pts = [];
+  wps.forEach(function(wp, i) {
+    if (wp.lat !== null && wp.lon !== null)
+      pts.push({ name: wp.name, lat: wp.lat, lon: wp.lon, idx: i });
+  });
+  if (pts.length === 0) {
+    log('No positioned waypoints to map yet', 'lerr');
+    return;
+  }
+
+  var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
+  var R = 6371000, D2R = Math.PI / 180;
+
+  // Centroid → local metres (x = east, y = north)
+  var lat0 = 0, lon0 = 0;
+  pts.forEach(function(p) { lat0 += p.lat; lon0 += p.lon; });
+  lat0 /= pts.length; lon0 /= pts.length;
+  var cosLat = Math.cos(lat0 * D2R);
+  pts.forEach(function(p) {
+    p.x = R * (p.lon - lon0) * D2R * cosLat;
+    p.y = R * (p.lat - lat0) * D2R;
+  });
+
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  pts.forEach(function(p) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  });
+  var spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+
+  var PLOT_MAX = 1400, PAD = 80, MAX_SCALE = 6;   // px / metre cap
+  var scale = Math.min(PLOT_MAX / Math.max(spanX, spanY), MAX_SCALE);
+  var plotW = spanX * scale, plotH = spanY * scale;
+
+  var HEADER = 150, ROW_H = 34;
+  var listRows = pts.length;
+  var FOOTER = 70 + listRows * ROW_H + 30;        // coord list at bottom
+  var canvasW = Math.round(Math.max(plotW, 520) + 2 * PAD);
+  var canvasH = Math.round(HEADER + Math.max(plotH, 360) + 2 * PAD + FOOTER);
+
+  var cv = document.createElement('canvas');
+  cv.width = canvasW; cv.height = canvasH;
+  var ctx = cv.getContext('2d');
+  var MONO = '"Menlo","Courier New",monospace';
+
+  // Background
+  ctx.fillStyle = '#0a0e12';
+  ctx.fillRect(0, 0, canvasW, canvasH);   // roundRect unavailable on iOS 15 — fillRect only
+
+  var boxLeft = (canvasW - plotW) / 2;
+  var plotAreaTop = HEADER + PAD;
+  var plotAreaH = Math.max(plotH, 360);
+  var boxTop = plotAreaTop + (plotAreaH - plotH) / 2;
+  function PX(p) { return boxLeft + (p.x - minX) * scale; }
+  function PY(p) { return boxTop + (maxY - p.y) * scale; }   // flip → north up
+
+  // Faint grid aligned to the scale-bar interval
+  var targetPx = 170, rawM = targetPx / scale;
+  var niceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
+  var stepM = niceSteps[niceSteps.length - 1];
+  for (var s = 0; s < niceSteps.length; s++) { if (niceSteps[s] >= rawM) { stepM = niceSteps[s]; break; } }
+  var stepPx = stepM * scale;
+  ctx.strokeStyle = 'rgba(0,212,255,0.08)'; ctx.lineWidth = 1;
+  var gx, gy;
+  for (gx = boxLeft; gx <= boxLeft + plotW + 0.5; gx += stepPx) {
+    ctx.beginPath(); ctx.moveTo(gx, plotAreaTop); ctx.lineTo(gx, plotAreaTop + plotAreaH); ctx.stroke();
+  }
+  for (gy = boxTop; gy <= boxTop + plotH + 0.5; gy += stepPx) {
+    ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke();
+  }
+
+  // Header
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = 'bold 40px ' + MONO;
+  ctx.textAlign = 'left';
+  ctx.fillText('DIVENAV — WAYPOINT MAP', PAD, 64);
+  var now = new Date();
+  function _p(n) { return (n < 10 ? '0' : '') + n; }
+  var stamp = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
+            + '  ' + _p(now.getHours()) + ':' + _p(now.getMinutes());
+  ctx.fillStyle = '#4a6070';
+  ctx.font = '24px ' + MONO;
+  ctx.fillText(stamp + '   ·   ' + pts.length + ' waypoints', PAD, 100);
+
+  // Segments in sequence + per-leg distance
+  if (pts.length > 1) {
+    ctx.strokeStyle = 'rgba(0,212,255,0.85)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(PX(pts[0]), PY(pts[0]));
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(PX(pts[i]), PY(pts[i]));
+    ctx.stroke();
+
+    ctx.font = '22px ' + MONO;
+    ctx.textAlign = 'center';
+    for (var j = 1; j < pts.length; j++) {
+      var a = pts[j - 1], b = pts[j];
+      var d = fmtDist(haversine(a.lat, a.lon, b.lat, b.lon));
+      var mx = (PX(a) + PX(b)) / 2, my = (PY(a) + PY(b)) / 2;
+      var label = d.v + d.u;
+      var w = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(10,14,18,0.85)';
+      ctx.fillRect(mx - w / 2 - 6, my - 26, w + 12, 26);
+      ctx.fillStyle = '#9fb8c8';
+      ctx.fillText(label, mx, my - 7);
+    }
+  }
+
+  // Current position (if known) as a separate marker — not part of the chain
+  if (myPos) {
+    var youX = R * (myPos.lon - lon0) * D2R * cosLat;
+    var youY = R * (myPos.lat - lat0) * D2R;
+    var yx = boxLeft + (youX - minX) * scale, yy = boxTop + (maxY - youY) * scale;
+    ctx.fillStyle = '#00ff9d';
+    ctx.beginPath(); ctx.arc(yx, yy, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,255,157,0.4)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(yx, yy, 16, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#00ff9d'; ctx.font = 'bold 20px ' + MONO; ctx.textAlign = 'left';
+    ctx.fillText('YOU', yx + 22, yy + 7);
+  }
+
+  // Waypoint dots + labels
+  ctx.textAlign = 'left';
+  pts.forEach(function(p, k) {
+    var col = DOT_COL[p.idx % DOT_COL.length];
+    var cx = PX(p), cy = PY(p);
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0a0e12';
+    ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(k + 1), cx, cy + 1);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    ctx.fillStyle = col; ctx.font = 'bold 26px ' + MONO;
+    ctx.fillText(p.name, cx + 24, cy - 6);
+    ctx.fillStyle = '#7d96a6'; ctx.font = '20px ' + MONO;
+    ctx.fillText(fmtCoord(p.lat, p.lon), cx + 24, cy + 20);
+  });
+
+  // North arrow (north is up by construction)
+  var nax = canvasW - PAD - 30, nay = plotAreaTop + 20;
+  ctx.strokeStyle = '#c8dce8'; ctx.fillStyle = '#c8dce8'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(nax, nay + 56); ctx.lineTo(nax, nay + 8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(nax - 11, nay + 22); ctx.lineTo(nax, nay + 2); ctx.lineTo(nax + 11, nay + 22); ctx.closePath(); ctx.fill();
+  ctx.font = 'bold 24px ' + MONO; ctx.textAlign = 'center';
+  ctx.fillText('N', nax, nay + 84);
+
+  // Scale bar (bottom-left of plot area)
+  var sbx = PAD, sby = plotAreaTop + plotAreaH - 24;
+  ctx.strokeStyle = '#c8dce8'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + stepPx, sby); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sbx, sby - 7); ctx.lineTo(sbx, sby + 7); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sbx + stepPx, sby - 7); ctx.lineTo(sbx + stepPx, sby + 7); ctx.stroke();
+  var sbLbl = fmtDist(stepM);
+  ctx.fillStyle = '#c8dce8'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
+  ctx.fillText(sbLbl.v + sbLbl.u, sbx + stepPx + 12, sby + 7);
+
+  // Coordinate list footer (makes the image self-documenting)
+  var listTop = plotAreaTop + plotAreaH + PAD + 20;
+  ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD, listTop - 24); ctx.lineTo(canvasW - PAD, listTop - 24); ctx.stroke();
+  ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
+  ctx.fillText('SEQUENCE', PAD, listTop);
+  pts.forEach(function(p, k) {
+    var ry = listTop + 30 + k * ROW_H;
+    var col = DOT_COL[p.idx % DOT_COL.length];
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
+    ctx.fillText((k + 1) + '. ' + p.name, PAD + 30, ry);
+    ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
+    ctx.fillText(fmtCoord(p.lat, p.lon), PAD + 360, ry);
+  });
+
+  // ── Save to device ──
+  var ds = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
+         + '_' + _p(now.getHours()) + '-' + _p(now.getMinutes());
+  var fname = 'divenav_map_' + ds + '.png';
+  cv.toBlob(function(blob) {
+    if (!blob) { log('Map render failed', 'lerr'); return; }
+    var file = null;
+    try { file = new File([blob], fname, { type: 'image/png' }); } catch (e) {}
+    var shareData = file ? { files: [file], title: 'DiveNav map' } : null;
+    if (shareData && navigator.canShare && navigator.canShare(shareData)) {
+      navigator.share(shareData).then(function() {
+        log('Map saved (Save Image → Photos)', 'lok');
+      }).catch(function(err) {
+        if (err.name !== 'AbortError') downloadMap(blob, fname);
+      });
+    } else {
+      downloadMap(blob, fname);
+    }
+  }, 'image/png');
+}
+
+function downloadMap(blob, fname) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+  log('Map downloaded: ' + fname, 'lok');
+}
+
+document.getElementById('saveMapBtn').addEventListener('click', saveWaypointMap);
 
 // ── GPS ──
 var _watchId = null;
