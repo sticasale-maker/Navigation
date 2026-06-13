@@ -127,6 +127,15 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 .wp-card.c2 { --card-color: var(--accent2); }
 .wp-card.c3 { --card-color: #ff9f43; }
 .wp-card.c4 { --card-color: #ee5a9b; }
+.wp-card.dragging { opacity: 0.9; box-shadow: 0 8px 24px rgba(0,0,0,0.55); }
+.wp-drag {
+  font-size: 18px; line-height: 1; color: var(--muted);
+  padding: 2px 4px 2px 0; margin-right: 2px;
+  cursor: grab; touch-action: none;
+  user-select: none; -webkit-user-select: none;
+  flex-shrink: 0;
+}
+.wp-drag:active { cursor: grabbing; color: var(--text); }
 
 /* card top row: name + buttons */
 .wp-top {
@@ -1132,12 +1141,14 @@ function render() {
     var card = document.createElement('div');
     card.className = 'wp-card ' + c;
     card.style.marginBottom = '10px';
+    card.setAttribute('data-idx', i);
 
     // Top row
     var coordSub = wp.lat !== null ? fmtCoord(wp.lat, wp.lon) : 'no position set';
     card.innerHTML =
       '<div class="wp-top">'+
         '<div class="wp-label-row">'+
+          '<div class="wp-drag" title="Drag to reorder">\u283f</div>'+
           '<div class="wp-bullet"></div>'+
           '<div class="wp-title" contenteditable="true" spellcheck="false" onblur="renameWP('+i+',this)">'+wp.name+'</div>'+
         '</div>'+
@@ -1154,6 +1165,74 @@ function render() {
     updateDataCells(i, wp);
   });
 }
+
+// ── Drag to reorder waypoints (touch + mouse) ──
+var _wpDrag = null;
+function wpDragStart(e, handle) {
+  var card = handle.closest('.wp-card');
+  if (!card) return;
+  if (e.cancelable) e.preventDefault();
+  var ev = e.touches ? e.touches[0] : e;
+  _wpDrag = { card: card, startY: ev.clientY };
+  card.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+  window.addEventListener('touchmove', wpDragMove, { passive: false });
+  window.addEventListener('touchend', wpDragEnd);
+  window.addEventListener('mousemove', wpDragMove);
+  window.addEventListener('mouseup', wpDragEnd);
+}
+function wpDragMove(e) {
+  if (!_wpDrag) return;
+  if (e.cancelable) e.preventDefault();
+  var ev = e.touches ? e.touches[0] : e;
+  _wpDrag.card.style.transform = 'translateY(' + (ev.clientY - _wpDrag.startY) + 'px)';
+  _wpDrag.card.style.zIndex = '60';
+  _wpDrag.card.style.pointerEvents = 'none';
+  var under = document.elementFromPoint(ev.clientX, ev.clientY);
+  _wpDrag.card.style.pointerEvents = '';
+  var over = under && under.closest ? under.closest('.wp-card') : null;
+  if (over && over !== _wpDrag.card && over.parentNode === _wpDrag.card.parentNode) {
+    var r = over.getBoundingClientRect();
+    var after = ev.clientY > r.top + r.height / 2;
+    _wpDrag.card.parentNode.insertBefore(_wpDrag.card, after ? over.nextSibling : over);
+    _wpDrag.startY = ev.clientY;
+    _wpDrag.card.style.transform = 'translateY(0px)';
+  }
+}
+function wpDragEnd() {
+  if (!_wpDrag) return;
+  var card = _wpDrag.card;
+  card.classList.remove('dragging');
+  card.style.transform = '';
+  card.style.zIndex = '';
+  card.style.pointerEvents = '';
+  document.body.style.userSelect = '';
+  window.removeEventListener('touchmove', wpDragMove);
+  window.removeEventListener('touchend', wpDragEnd);
+  window.removeEventListener('mousemove', wpDragMove);
+  window.removeEventListener('mouseup', wpDragEnd);
+  _wpDrag = null;
+  // Rebuild wps from the new DOM order, then persist + re-render
+  var order = [];
+  document.querySelectorAll('#wpContainer .wp-card').forEach(function(c) {
+    order.push(wps[parseInt(c.getAttribute('data-idx'), 10)]);
+  });
+  wps = order;
+  saveWPs();
+  render();
+}
+(function() {
+  var wpc = document.getElementById('wpContainer');
+  if (!wpc) return;
+  wpc.addEventListener('touchstart', function(e) {
+    var h = e.target.closest ? e.target.closest('.wp-drag') : null;
+    if (h) wpDragStart(e, h);
+  }, { passive: false });
+  wpc.addEventListener('mousedown', function(e) {
+    var h = e.target.closest ? e.target.closest('.wp-drag') : null;
+    if (h) wpDragStart(e, h);
+  });
+})();
 
 function updateDataCells(i, wp) {
   var el = document.getElementById('data'+i);
@@ -1614,56 +1693,60 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
     });
     kml += '</Document>\n</kml>';
 
-    var dateStr = new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');
+    // Recording-start timestamp = the first logged fix (survives reloads).
+    var startDate = fixes.length ? new Date(fixes[0].ts) : new Date();
+    function _p(n) { return (n < 10 ? '0' : '') + n; }
+    var yy = _p(startDate.getFullYear() % 100), MM = _p(startDate.getMonth() + 1),
+        dd = _p(startDate.getDate()), hh = _p(startDate.getHours()), mi = _p(startDate.getMinutes());
+    var subject = 'DiveNav Log ' + yy + '-' + MM + '-' + dd + ' ' + hh + '-' + mi; // "DiveNav Log 26-06-14 09-32"
+    var dateStr = '20' + yy + '-' + MM + '-' + dd + '_' + hh + '-' + mi;            // filename stem
     var TO_EMAIL = 'sticasale@gmail.com';
 
-    // ── Share via Web Share API (native iOS share sheet only) ──
-    // Android Gmail silently drops file attachments from Web Share intents,
-    // so fall straight through to the download+mailto fallback on Android.
-    var isAndroid = /Android/i.test(navigator.userAgent);
-    if (!isAndroid && navigator.canShare) {
-      var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
-      var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
-      var kmlFile = new File([kml], 'divenav_' + dateStr + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
-      var shareData = { files: [csvFile, gpxFile, kmlFile], title: 'DiveNav GPS Log' };
-      if (navigator.canShare(shareData)) {
-        navigator.share(shareData).then(function() {
-          clearLogFixes(function() { updateLogUI(0); log('Log sent and cleared', 'lok'); });
-        }).catch(function(err) {
-          if (err.name !== 'AbortError') fallbackSend(csv, gpx, kml, dateStr, TO_EMAIL);
-        });
-        return;
-      }
+    var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
+    var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
+    var kmlFile = new File([kml], 'divenav_' + dateStr + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
+    var shareData = { files: [csvFile, gpxFile, kmlFile], title: subject, text: subject };
+
+    // ── Share with files — the only path that auto-attaches all three on
+    // BOTH iOS and Android. mailto cannot carry attachments, so the share
+    // sheet (pick Gmail / Mail) is the automatic route. ──
+    if (navigator.canShare && navigator.canShare(shareData)) {
+      navigator.share(shareData).then(function() {
+        clearLogFixes(function() { updateLogUI(0); log('Log shared (CSV+GPX+KML) and cleared', 'lok'); });
+      }).catch(function(err) {
+        if (err.name !== 'AbortError') fallbackSend(csv, gpx, kml, dateStr, subject, TO_EMAIL);
+      });
+      return;
     }
-    fallbackSend(csv, gpx, kml, dateStr, TO_EMAIL);
+    fallbackSend(csv, gpx, kml, dateStr, subject, TO_EMAIL);
   });
 });
 
-function fallbackSend(csv, gpx, kml, dateStr, email) {
-  // Download all three files then open Mail with recipient pre-filled
-  var a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download = 'divenav_' + dateStr + '.csv';
-  a.click();
+function fallbackSend(csv, gpx, kml, dateStr, subject, email) {
+  // No file-share support: download all three reliably (Blob URLs are far
+  // more dependable than data: URLs on Android), then open Mail.
+  function dl(content, mime, ext) {
+    var blob = new Blob([content], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'divenav_' + dateStr + '.' + ext;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+  }
+  dl(csv, 'text/csv', 'csv');
+  setTimeout(function() { dl(gpx, 'application/gpx+xml', 'gpx'); }, 700);
+  setTimeout(function() { dl(kml, 'application/vnd.google-earth.kml+xml', 'kml'); }, 1400);
   setTimeout(function() {
-    var b = document.createElement('a');
-    b.href = 'data:application/gpx+xml;charset=utf-8,' + encodeURIComponent(gpx);
-    b.download = 'divenav_' + dateStr + '.gpx';
-    b.click();
-    setTimeout(function() {
-      var c = document.createElement('a');
-      c.href = 'data:application/vnd.google-earth.kml+xml;charset=utf-8,' + encodeURIComponent(kml);
-      c.download = 'divenav_' + dateStr + '.kml';
-      c.click();
-      setTimeout(function() {
-        window.location.href = 'mailto:' + email
-          + '?subject=' + encodeURIComponent('DiveNav GPS Log ' + dateStr)
-          + '&body=' + encodeURIComponent('GPS log files attached (divenav_' + dateStr + '.csv, .gpx and .kml). Open the .kml in Google Maps to see accuracy per point.');
-        clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
-      }, 600);
-    }, 500);
-  }, 500);
+    var body = 'GPS log: divenav_' + dateStr + '.csv, .gpx and .kml.\n'
+             + '(If not already attached, add the 3 files just downloaded.) '
+             + 'Open the .kml in Google Maps to see accuracy per point.';
+    var a = document.createElement('a');
+    a.href = 'mailto:' + email + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
+  }, 2100);
 }
+
 </script>
 <div id="delLogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);align-items:center;justify-content:center;z-index:300;padding:20px;">
   <div style="background:var(--surface);border:1px solid rgba(255,107,53,0.4);border-radius:16px;padding:28px 22px;width:100%;max-width:340px;display:flex;flex-direction:column;gap:18px;">
