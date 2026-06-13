@@ -342,6 +342,18 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 }
 .btn-savemap:active { background: rgba(0,255,157,0.16); }
 .btn-savemap:disabled { opacity: 0.35; cursor: default; }
+.entry-res {
+  text-align: left; padding: 11px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-bottom: none; background: var(--panel);
+}
+.entry-res:first-child { border-top-left-radius: 8px; border-top-right-radius: 8px; }
+.entry-res:last-child { border-bottom: 1px solid var(--border); border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }
+.entry-res:active { background: rgba(0,212,255,0.10); }
+.entry-res.sel { background: rgba(0,255,157,0.12); border-color: rgba(0,255,157,0.45); }
+.entry-res .er-name { font-family: 'Share Tech Mono', monospace; font-size: 15px; color: var(--text); }
+.entry-res .er-ctx  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.entry-res .er-tag  { font-size: 11px; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; }
+.entry-status { font-size: 12px; color: var(--muted); text-align: center; padding: 8px; }
 
 /* ── Coord entry modal ── */
 #modal {
@@ -446,6 +458,7 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   color: var(--warn);
 }
 #instrModal.hidden { display: none !important; }
+#entryModal.hidden { display: none !important; }
 
 /* ---- Data Logger Footer ---- */
 footer#loggerFooter {
@@ -673,6 +686,24 @@ footer#loggerFooter {
     </div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">3.</span> Lock the screen, close the box and good luck with your explorations!</div>
     <button onclick="document.getElementById('instrModal').classList.add('hidden')" style="margin-top:6px;font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;padding:13px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CLOSE</button>
+  </div>
+</div>
+
+<!-- ── Entry-point picker (typeahead) for SAVE MAP loop ── -->
+<div id="entryModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.78);display:flex;align-items:flex-start;justify-content:center;z-index:300;padding:60px 18px 18px;">
+  <div class="modal-box" style="max-width:420px;gap:12px;">
+    <div class="modal-title">ENTRY / EXIT POINT</div>
+    <div class="modal-note">Pick the beach you enter and exit from. It becomes the start <b>and</b> the end of the loop. Search shows nearby matches first so you can tell same-named beaches apart. (Needs internet.)</div>
+    <div class="field-group">
+      <input class="field-input" id="entrySearch" type="text" inputmode="search" placeholder="e.g. Shelly Beach" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div id="entryResults" style="display:flex;flex-direction:column;gap:0;max-height:46vh;overflow-y:auto;border-radius:8px;"></div>
+    <div id="entrySelected" style="display:none;font-size:13px;color:var(--accent2);font-family:'Share Tech Mono',monospace;line-height:1.5;padding:8px 10px;background:rgba(0,255,157,0.07);border:1px solid rgba(0,255,157,0.3);border-radius:8px;"></div>
+    <div class="modal-btns" style="flex-wrap:wrap;">
+      <button class="modal-btn cancel" id="entryCancelBtn">CANCEL</button>
+      <button class="modal-btn cancel" id="entrySkipBtn">NO LOOP</button>
+      <button class="modal-btn confirm" id="entryGoBtn" disabled style="opacity:0.4;">GENERATE →</button>
+    </div>
   </div>
 </div>
 
@@ -1430,207 +1461,441 @@ document.getElementById('addBtn').addEventListener('click', function() {
   saveWPs(); render();
 });
 
-// ── Save a map image: waypoints plotted + connected in sequence ──
-// Self-contained PNG drawn on a <canvas> (no network/tiles needed offshore).
-// Points are projected to a local equirectangular plane (true shape/scale),
-// connected by segments in waypoint order, labelled with names, coords and
-// per-leg distances, then saved to the device (share sheet → Photos on iOS,
-// download fallback elsewhere).
-function saveWaypointMap() {
+// ════════════════════════════════════════════════════════════════════
+//  SAVE MAP
+//  This is a PLANNING / OUTPUT feature and (unlike the underwater nav,
+//  which stays fully offline) it uses the internet: satellite tiles for
+//  the background and a geocoder for the beach typeahead. Flow:
+//    1. tap SAVE MAP → entry-point picker (typeahead, disambiguates
+//       same-named beaches by showing suburb/state/country)
+//    2. chosen beach becomes the START and END of the loop
+//    3. render satellite background (Web Mercator) + loop + markers
+//    4. save to device (share sheet → Photos on iOS, download fallback)
+// ════════════════════════════════════════════════════════════════════
+
+var D2R_M = Math.PI / 180, TILE_SZ = 256;
+// Esri World Imagery — free, no key, CORS-enabled (stays un-tainted so we
+// can export the canvas). URL order is {z}/{y}/{x}.
+function tileURL(z, x, y) {
+  return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'
+       + z + '/' + y + '/' + x;
+}
+function lon2px(lon, z) { return (lon + 180) / 360 * TILE_SZ * Math.pow(2, z); }
+function lat2px(lat, z) {
+  var s = Math.max(Math.min(Math.sin(lat * D2R_M), 0.9999), -0.9999);
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TILE_SZ * Math.pow(2, z);
+}
+
+// ── Entry-point picker (typeahead via Photon geocoder) ──────────────
+var _entrySel = null, _entryTimer = null, _entryResults = [];
+
+function loadStoredEntry() {
+  try { return JSON.parse(localStorage.getItem('divenav_entry') || 'null'); }
+  catch (e) { return null; }
+}
+
+function openEntryModal() {
+  var m = document.getElementById('entryModal');
+  var inp = document.getElementById('entrySearch');
+  var res = document.getElementById('entryResults');
+  var go  = document.getElementById('entryGoBtn');
+  res.innerHTML = '';
+  _entryResults = [];
+  _entrySel = loadStoredEntry();
+  if (_entrySel) {
+    showSelectedEntry();
+    go.disabled = false; go.style.opacity = '1';
+    inp.value = '';
+    document.getElementById('entryResults').innerHTML =
+      '<div class="entry-status">Last entry kept — search to change it.</div>';
+  } else {
+    document.getElementById('entrySelected').style.display = 'none';
+    go.disabled = true; go.style.opacity = '0.4';
+    inp.value = '';
+  }
+  m.classList.remove('hidden');
+  setTimeout(function () { try { inp.focus(); } catch (e) {} }, 60);
+}
+
+function showSelectedEntry() {
+  var el = document.getElementById('entrySelected');
+  if (!_entrySel) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '▶ ENTRY: ' + _entrySel.name + '<br>' + fmtCoord(_entrySel.lat, _entrySel.lon)
+               + (_entrySel.label ? '<br><span style="color:var(--muted)">' + _entrySel.label + '</span>' : '');
+}
+
+function entrySearchInput() {
+  var q = document.getElementById('entrySearch').value.trim();
+  if (_entryTimer) clearTimeout(_entryTimer);
+  if (q.length < 3) {
+    document.getElementById('entryResults').innerHTML =
+      '<div class="entry-status">Type at least 3 letters…</div>';
+    return;
+  }
+  document.getElementById('entryResults').innerHTML =
+    '<div class="entry-status">Searching…</div>';
+  _entryTimer = setTimeout(function () { photonSearch(q); }, 320);
+}
+
+function photonSearch(q) {
+  // Bias results toward the diver's current/last location so the nearest
+  // matching beach surfaces first among same-named ones.
+  var bias = myPos || _entrySel || { lat: -33.87, lon: 151.21 };  // fallback: Sydney
+  var url = 'https://photon.komoot.io/api/?limit=8&lang=en'
+          + '&lat=' + bias.lat + '&lon=' + bias.lon
+          + '&q=' + encodeURIComponent(q);
+  fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+    var feats = (data && data.features) || [];
+    _entryResults = feats.map(function (f) {
+      var p = f.properties || {}, c = (f.geometry && f.geometry.coordinates) || [];
+      var ctxParts = [];
+      [p.city, p.county, p.district].some(function (v) { if (v && v !== p.name) { ctxParts.push(v); return true; } return false; });
+      if (p.state && p.state !== p.name) ctxParts.push(p.state);
+      if (p.country) ctxParts.push(p.country);
+      return {
+        name: p.name || q,
+        label: ctxParts.join(', '),
+        tag: p.osm_value || p.type || '',
+        lat: c[1], lon: c[0]
+      };
+    }).filter(function (x) { return typeof x.lat === 'number' && typeof x.lon === 'number'; });
+    renderEntryResults();
+  }).catch(function () {
+    document.getElementById('entryResults').innerHTML =
+      '<div class="entry-status">Search failed — check internet connection.</div>';
+  });
+}
+
+function renderEntryResults() {
+  var res = document.getElementById('entryResults');
+  if (!_entryResults.length) {
+    res.innerHTML = '<div class="entry-status">No matches — try a different spelling.</div>';
+    return;
+  }
+  res.innerHTML = '';
+  _entryResults.forEach(function (r, i) {
+    var row = document.createElement('div');
+    row.className = 'entry-res';
+    row.innerHTML = '<div class="er-name">' + r.name + (r.tag ? ' <span class="er-tag">' + r.tag + '</span>' : '') + '</div>'
+                  + (r.label ? '<div class="er-ctx">' + r.label + '</div>' : '')
+                  + '<div class="er-ctx">' + fmtCoord(r.lat, r.lon) + '</div>';
+    row.onclick = function () { selectEntry(i); };
+    res.appendChild(row);
+  });
+}
+
+function selectEntry(i) {
+  _entrySel = _entryResults[i];
+  var rows = document.querySelectorAll('#entryResults .entry-res');
+  for (var k = 0; k < rows.length; k++) rows[k].classList.toggle('sel', k === i);
+  showSelectedEntry();
+  var go = document.getElementById('entryGoBtn');
+  go.disabled = false; go.style.opacity = '1';
+}
+
+function entryGenerate(useEntry) {
+  document.getElementById('entryModal').classList.add('hidden');
+  var entry = null;
+  if (useEntry && _entrySel) {
+    entry = _entrySel;
+    try { localStorage.setItem('divenav_entry', JSON.stringify(entry)); } catch (e) {}
+  }
+  renderMapImage(entry);
+}
+
+// ── Build & save the map image ──────────────────────────────────────
+function renderMapImage(entry) {
   var pts = [];
-  wps.forEach(function(wp, i) {
+  wps.forEach(function (wp, i) {
     if (wp.lat !== null && wp.lon !== null)
       pts.push({ name: wp.name, lat: wp.lat, lon: wp.lon, idx: i });
   });
-  if (pts.length === 0) {
-    log('No positioned waypoints to map yet', 'lerr');
-    return;
+  if (pts.length === 0) { log('No positioned waypoints to map yet', 'lerr'); return; }
+
+  var btn = document.getElementById('saveMapBtn');
+  var btnTxt = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ BUILDING MAP…';
+  log('Building map' + (entry ? ' (loop from ' + entry.name + ')' : '') + '…', 'linf');
+
+  // Path nodes: entry → waypoints → entry (loop) when an entry is chosen.
+  var path = [];
+  if (entry) path.push({ name: entry.name, lat: entry.lat, lon: entry.lon, entry: true });
+  pts.forEach(function (p) { path.push(p); });
+  if (entry) path.push({ name: entry.name, lat: entry.lat, lon: entry.lon, entry: true });
+
+  // Geo bounds of everything we want in frame.
+  var minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  path.forEach(function (p) {
+    if (p.lat < minLat) minLat = p.lat; if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon; if (p.lon > maxLon) maxLon = p.lon;
+  });
+  // Margin so markers aren't on the edge and you see surrounding coast.
+  var dLat = maxLat - minLat, dLon = maxLon - minLon;
+  var mLat = Math.max(dLat * 0.22, 0.0010), mLon = Math.max(dLon * 0.22, 0.0010);
+  minLat -= mLat; maxLat += mLat; minLon -= mLon; maxLon += mLon;
+
+  // Pick the highest zoom whose pixel span fits the target plot size.
+  var MAXPX = 1280, z;
+  for (z = 19; z >= 3; z--) {
+    var w = lon2px(maxLon, z) - lon2px(minLon, z);
+    var h = lat2px(minLat, z) - lat2px(maxLat, z);
+    if (w <= MAXPX && h <= MAXPX) break;
   }
+  var minGx = lon2px(minLon, z), maxGx = lon2px(maxLon, z);
+  var minGy = lat2px(maxLat, z), maxGy = lat2px(minLat, z); // y grows southward
+  var plotW = Math.ceil(maxGx - minGx), plotH = Math.ceil(maxGy - minGy);
+  if (plotW < 420) { var ax = (420 - plotW) / 2; minGx -= ax; plotW = 420; }
+  if (plotH < 360) { var ay = (360 - plotH) / 2; minGy -= ay; plotH = 360; }
 
-  var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
-  var R = 6371000, D2R = Math.PI / 180;
-
-  // Centroid → local metres (x = east, y = north)
-  var lat0 = 0, lon0 = 0;
-  pts.forEach(function(p) { lat0 += p.lat; lon0 += p.lon; });
-  lat0 /= pts.length; lon0 /= pts.length;
-  var cosLat = Math.cos(lat0 * D2R);
-  pts.forEach(function(p) {
-    p.x = R * (p.lon - lon0) * D2R * cosLat;
-    p.y = R * (p.lat - lat0) * D2R;
-  });
-
-  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  pts.forEach(function(p) {
-    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-  });
-  var spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
-
-  var PLOT_MAX = 1400, PAD = 80, MAX_SCALE = 6;   // px / metre cap
-  var scale = Math.min(PLOT_MAX / Math.max(spanX, spanY), MAX_SCALE);
-  var plotW = spanX * scale, plotH = spanY * scale;
-
-  var HEADER = 150, ROW_H = 34;
-  var listRows = pts.length;
-  var FOOTER = 70 + listRows * ROW_H + 30;        // coord list at bottom
-  var canvasW = Math.round(Math.max(plotW, 520) + 2 * PAD);
-  var canvasH = Math.round(HEADER + Math.max(plotH, 360) + 2 * PAD + FOOTER);
+  var PAD = 70, HEADER = 150, ROW_H = 34;
+  var listRows = pts.length + (entry ? 1 : 0);
+  var FOOTER = 70 + listRows * ROW_H + 36;
+  var canvasW = Math.round(Math.max(plotW, 540) + 2 * PAD);
+  var canvasH = Math.round(HEADER + plotH + 2 * PAD + FOOTER);
+  var boxLeft = Math.round((canvasW - plotW) / 2);
+  var boxTop  = HEADER + PAD;
 
   var cv = document.createElement('canvas');
   cv.width = canvasW; cv.height = canvasH;
   var ctx = cv.getContext('2d');
   var MONO = '"Menlo","Courier New",monospace';
+  var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
 
-  // Background
   ctx.fillStyle = '#0a0e12';
-  ctx.fillRect(0, 0, canvasW, canvasH);   // roundRect unavailable on iOS 15 — fillRect only
+  ctx.fillRect(0, 0, canvasW, canvasH);
 
-  var boxLeft = (canvasW - plotW) / 2;
-  var plotAreaTop = HEADER + PAD;
-  var plotAreaH = Math.max(plotH, 360);
-  var boxTop = plotAreaTop + (plotAreaH - plotH) / 2;
-  function PX(p) { return boxLeft + (p.x - minX) * scale; }
-  function PY(p) { return boxTop + (maxY - p.y) * scale; }   // flip → north up
+  function CX(lon) { return boxLeft + (lon2px(lon, z) - minGx); }
+  function CY(lat) { return boxTop + (lat2px(lat, z) - minGy); }
 
-  // Faint grid aligned to the scale-bar interval
-  var targetPx = 170, rawM = targetPx / scale;
-  var niceSteps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
-  var stepM = niceSteps[niceSteps.length - 1];
-  for (var s = 0; s < niceSteps.length; s++) { if (niceSteps[s] >= rawM) { stepM = niceSteps[s]; break; } }
-  var stepPx = stepM * scale;
-  ctx.strokeStyle = 'rgba(0,212,255,0.08)'; ctx.lineWidth = 1;
-  var gx, gy;
-  for (gx = boxLeft; gx <= boxLeft + plotW + 0.5; gx += stepPx) {
-    ctx.beginPath(); ctx.moveTo(gx, plotAreaTop); ctx.lineTo(gx, plotAreaTop + plotAreaH); ctx.stroke();
-  }
-  for (gy = boxTop; gy <= boxTop + plotH + 0.5; gy += stepPx) {
-    ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke();
-  }
-
-  // Header
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#00d4ff';
-  ctx.font = 'bold 40px ' + MONO;
-  ctx.textAlign = 'left';
-  ctx.fillText('DIVENAV — WAYPOINT MAP', PAD, 64);
-  var now = new Date();
-  function _p(n) { return (n < 10 ? '0' : '') + n; }
-  var stamp = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
-            + '  ' + _p(now.getHours()) + ':' + _p(now.getMinutes());
-  ctx.fillStyle = '#4a6070';
-  ctx.font = '24px ' + MONO;
-  ctx.fillText(stamp + '   ·   ' + pts.length + ' waypoints', PAD, 100);
-
-  // Segments in sequence + per-leg distance
-  if (pts.length > 1) {
-    ctx.strokeStyle = 'rgba(0,212,255,0.85)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(PX(pts[0]), PY(pts[0]));
-    for (var i = 1; i < pts.length; i++) ctx.lineTo(PX(pts[i]), PY(pts[i]));
-    ctx.stroke();
-
-    ctx.font = '22px ' + MONO;
-    ctx.textAlign = 'center';
-    for (var j = 1; j < pts.length; j++) {
-      var a = pts[j - 1], b = pts[j];
-      var d = fmtDist(haversine(a.lat, a.lon, b.lat, b.lon));
-      var mx = (PX(a) + PX(b)) / 2, my = (PY(a) + PY(b)) / 2;
-      var label = d.v + d.u;
-      var w = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(10,14,18,0.85)';
-      ctx.fillRect(mx - w / 2 - 6, my - 26, w + 12, 26);
-      ctx.fillStyle = '#9fb8c8';
-      ctx.fillText(label, mx, my - 7);
+  // Load the satellite tiles covering the plot region.
+  var maxIdx = Math.pow(2, z) - 1;
+  var txMin = Math.floor(minGx / TILE_SZ), txMax = Math.floor((minGx + plotW) / TILE_SZ);
+  var tyMin = Math.floor(minGy / TILE_SZ), tyMax = Math.floor((minGy + plotH) / TILE_SZ);
+  var jobs = [];
+  for (var tx = txMin; tx <= txMax; tx++) {
+    for (var ty = tyMin; ty <= tyMax; ty++) {
+      (function (tx, ty) {
+        jobs.push(new Promise(function (resolve) {
+          if (tx < 0 || ty < 0 || tx > maxIdx || ty > maxIdx) { resolve(null); return; }
+          var img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = function () { resolve({ img: img, tx: tx, ty: ty }); };
+          img.onerror = function () { resolve(null); };
+          img.src = tileURL(z, tx, ty);
+        }));
+      })(tx, ty);
     }
   }
 
-  // Current position (if known) as a separate marker — not part of the chain
-  if (myPos) {
-    var youX = R * (myPos.lon - lon0) * D2R * cosLat;
-    var youY = R * (myPos.lat - lat0) * D2R;
-    var yx = boxLeft + (youX - minX) * scale, yy = boxTop + (maxY - youY) * scale;
-    ctx.fillStyle = '#00ff9d';
-    ctx.beginPath(); ctx.arc(yx, yy, 9, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,255,157,0.4)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(yx, yy, 16, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#00ff9d'; ctx.font = 'bold 20px ' + MONO; ctx.textAlign = 'left';
-    ctx.fillText('YOU', yx + 22, yy + 7);
+  Promise.all(jobs).then(function (tiles) {
+    var loaded = 0;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(boxLeft, boxTop, plotW, plotH); ctx.clip();
+    tiles.forEach(function (t) {
+      if (!t) return;
+      ctx.drawImage(t.img, boxLeft + (t.tx * TILE_SZ - minGx), boxTop + (t.ty * TILE_SZ - minGy));
+      loaded++;
+    });
+    if (loaded === 0) {
+      // No imagery (offline / blocked) → readable dark fallback.
+      ctx.fillStyle = '#0d1620'; ctx.fillRect(boxLeft, boxTop, plotW, plotH);
+      ctx.strokeStyle = 'rgba(0,212,255,0.10)'; ctx.lineWidth = 1;
+      for (var gx = boxLeft; gx <= boxLeft + plotW; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, boxTop); ctx.lineTo(gx, boxTop + plotH); ctx.stroke(); }
+      for (var gy = boxTop; gy <= boxTop + plotH; gy += 80) { ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke(); }
+    }
+    // Slight dark wash so bright overlays read well on imagery.
+    ctx.fillStyle = 'rgba(6,10,14,0.18)';
+    ctx.fillRect(boxLeft, boxTop, plotW, plotH);
+    ctx.restore();
+
+    drawOverlays(loaded);
+  }).catch(function () { drawOverlays(0); });
+
+  function chip(text, cx, cy, font, color) {
+    ctx.font = font; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    var w = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(8,12,16,0.78)';
+    ctx.fillRect(cx - 4, cy - 20, w + 8, 26);
+    ctx.fillStyle = color; ctx.fillText(text, cx, cy);
+    return w;
   }
 
-  // Waypoint dots + labels
-  ctx.textAlign = 'left';
-  pts.forEach(function(p, k) {
-    var col = DOT_COL[p.idx % DOT_COL.length];
-    var cx = PX(p), cy = PY(p);
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#0a0e12';
-    ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(k + 1), cx, cy + 1);
-    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
-    ctx.fillStyle = col; ctx.font = 'bold 26px ' + MONO;
-    ctx.fillText(p.name, cx + 24, cy - 6);
-    ctx.fillStyle = '#7d96a6'; ctx.font = '20px ' + MONO;
-    ctx.fillText(fmtCoord(p.lat, p.lon), cx + 24, cy + 20);
-  });
+  function drawOverlays(loaded) {
+    // Plot border
+    ctx.strokeStyle = 'rgba(0,212,255,0.35)'; ctx.lineWidth = 2;
+    ctx.strokeRect(boxLeft, boxTop, plotW, plotH);
 
-  // North arrow (north is up by construction)
-  var nax = canvasW - PAD - 30, nay = plotAreaTop + 20;
-  ctx.strokeStyle = '#c8dce8'; ctx.fillStyle = '#c8dce8'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(nax, nay + 56); ctx.lineTo(nax, nay + 8); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(nax - 11, nay + 22); ctx.lineTo(nax, nay + 2); ctx.lineTo(nax + 11, nay + 22); ctx.closePath(); ctx.fill();
-  ctx.font = 'bold 24px ' + MONO; ctx.textAlign = 'center';
-  ctx.fillText('N', nax, nay + 84);
+    // Header
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 40px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('DIVENAV — DIVE MAP', PAD, 64);
+    var now = new Date();
+    function _p(n) { return (n < 10 ? '0' : '') + n; }
+    var stamp = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
+              + '  ' + _p(now.getHours()) + ':' + _p(now.getMinutes());
+    ctx.fillStyle = '#4a6070'; ctx.font = '24px ' + MONO;
+    var sub = stamp + '   ·   ' + pts.length + ' waypoints' + (entry ? '   ·   loop from ' + entry.name : '');
+    ctx.fillText(sub, PAD, 100);
 
-  // Scale bar (bottom-left of plot area)
-  var sbx = PAD, sby = plotAreaTop + plotAreaH - 24;
-  ctx.strokeStyle = '#c8dce8'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + stepPx, sby); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(sbx, sby - 7); ctx.lineTo(sbx, sby + 7); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(sbx + stepPx, sby - 7); ctx.lineTo(sbx + stepPx, sby + 7); ctx.stroke();
-  var sbLbl = fmtDist(stepM);
-  ctx.fillStyle = '#c8dce8'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
-  ctx.fillText(sbLbl.v + sbLbl.u, sbx + stepPx + 12, sby + 7);
+    // Clip overlays to the plot rectangle
+    ctx.save();
+    ctx.beginPath(); ctx.rect(boxLeft, boxTop, plotW, plotH); ctx.clip();
 
-  // Coordinate list footer (makes the image self-documenting)
-  var listTop = plotAreaTop + plotAreaH + PAD + 20;
-  ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(PAD, listTop - 24); ctx.lineTo(canvasW - PAD, listTop - 24); ctx.stroke();
-  ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
-  ctx.fillText('SEQUENCE', PAD, listTop);
-  pts.forEach(function(p, k) {
-    var ry = listTop + 30 + k * ROW_H;
-    var col = DOT_COL[p.idx % DOT_COL.length];
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
-    ctx.fillText((k + 1) + '. ' + p.name, PAD + 30, ry);
-    ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
-    ctx.fillText(fmtCoord(p.lat, p.lon), PAD + 360, ry);
-  });
+    // Loop / track line (dark underlay + bright stroke for legibility)
+    if (path.length > 1) {
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(CX(path[0].lon), CY(path[0].lat));
+      for (var i = 1; i < path.length; i++) ctx.lineTo(CX(path[i].lon), CY(path[i].lat));
+      ctx.stroke();
+      ctx.strokeStyle = entry ? 'rgba(0,255,157,0.95)' : 'rgba(0,212,255,0.95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(CX(path[0].lon), CY(path[0].lat));
+      for (var i2 = 1; i2 < path.length; i2++) ctx.lineTo(CX(path[i2].lon), CY(path[i2].lat));
+      ctx.stroke();
 
-  // ── Save to device ──
-  var ds = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
-         + '_' + _p(now.getHours()) + '-' + _p(now.getMinutes());
-  var fname = 'divenav_map_' + ds + '.png';
-  cv.toBlob(function(blob) {
+      // Per-leg distances
+      for (var j = 1; j < path.length; j++) {
+        var a = path[j - 1], b = path[j];
+        var d = fmtDist(haversine(a.lat, a.lon, b.lat, b.lon));
+        var mx = (CX(a.lon) + CX(b.lon)) / 2, my = (CY(a.lat) + CY(b.lat)) / 2;
+        var label = d.v + d.u;
+        ctx.textAlign = 'center'; ctx.font = '21px ' + MONO;
+        var w = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(8,12,16,0.82)'; ctx.fillRect(mx - w / 2 - 5, my - 24, w + 10, 25);
+        ctx.fillStyle = '#bfe9ff'; ctx.fillText(label, mx, my - 6);
+      }
+    }
+
+    // YOU (current position) if it lands inside the frame
+    if (myPos) {
+      var yx = CX(myPos.lon), yy = CY(myPos.lat);
+      if (yx >= boxLeft && yx <= boxLeft + plotW && yy >= boxTop && yy <= boxTop + plotH) {
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(yx, yy, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(yx, yy, 15, 0, Math.PI * 2); ctx.stroke();
+        chip('YOU', yx + 20, yy + 6, 'bold 19px ' + MONO, '#ffffff');
+      }
+    }
+
+    // Entry / exit marker (drawn once, distinct shape)
+    if (entry) {
+      var ex = CX(entry.lon), ey = CY(entry.lat);
+      ctx.fillStyle = '#ffd34d'; ctx.strokeStyle = '#0a0e12'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey - 18); ctx.lineTo(ex + 16, ey); ctx.lineTo(ex, ey + 18); ctx.lineTo(ex - 16, ey);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      chip('ENTRY / EXIT', ex + 22, ey + 6, 'bold 24px ' + MONO, '#ffd34d');
+    }
+
+    // Waypoint dots + labels
+    pts.forEach(function (p, k) {
+      var col = DOT_COL[p.idx % DOT_COL.length];
+      var cx = CX(p.lon), cy = CY(p.lat);
+      ctx.fillStyle = col; ctx.strokeStyle = '#0a0e12'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#0a0e12'; ctx.font = 'bold 22px ' + MONO;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(k + 1), cx, cy + 1);
+      ctx.textBaseline = 'alphabetic';
+      chip(p.name, cx + 22, cy - 5, 'bold 25px ' + MONO, col);
+      chip(fmtCoord(p.lat, p.lon), cx + 22, cy + 19, '19px ' + MONO, '#dfeefa');
+    });
+
+    ctx.restore(); // end plot clip
+
+    // North arrow (Mercator is north-up)
+    var nax = canvasW - PAD - 30, nay = boxTop + 26;
+    ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(nax, nay + 56); ctx.lineTo(nax, nay + 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(nax - 11, nay + 22); ctx.lineTo(nax, nay + 2); ctx.lineTo(nax + 11, nay + 22); ctx.closePath(); ctx.fill();
+    ctx.font = 'bold 24px ' + MONO; ctx.textAlign = 'center';
+    chip('N', nax - 7, nay + 86, 'bold 24px ' + MONO, '#ffffff');
+
+    // Scale bar (metres-per-pixel varies with latitude in Mercator)
+    var centerLat = (minLat + maxLat) / 2;
+    var mpp = 156543.03392 * Math.cos(centerLat * D2R_M) / Math.pow(2, z);
+    var niceSteps = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+    var targetM = 170 * mpp, stepM = niceSteps[niceSteps.length - 1];
+    for (var s = 0; s < niceSteps.length; s++) { if (niceSteps[s] >= targetM) { stepM = niceSteps[s]; break; } }
+    var stepPx = stepM / mpp;
+    var sbx = boxLeft + 16, sby = boxTop + plotH - 22;
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + stepPx, sby); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sbx, sby - 7); ctx.lineTo(sbx, sby + 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sbx + stepPx, sby - 7); ctx.lineTo(sbx + stepPx, sby + 7); ctx.stroke();
+    var sbLbl = fmtDist(stepM);
+    chip(sbLbl.v + sbLbl.u, sbx + stepPx + 10, sby + 6, '22px ' + MONO, '#ffffff');
+
+    // Attribution (required) + offline note if imagery missing
+    ctx.font = '16px ' + MONO; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    var attr = loaded ? 'Imagery © Esri, Maxar, Earthstar Geographics' : 'No imagery (offline) — schematic only';
+    var aw = ctx.measureText(attr).width;
+    ctx.fillStyle = 'rgba(8,12,16,0.7)'; ctx.fillRect(boxLeft + plotW - aw - 12, boxTop + plotH - 24, aw + 10, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText(attr, boxLeft + plotW - 6, boxTop + plotH - 7);
+
+    // Sequence list footer
+    var listTop = boxTop + plotH + PAD + 20;
+    ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD, listTop - 24); ctx.lineTo(canvasW - PAD, listTop - 24); ctx.stroke();
+    ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('SEQUENCE', PAD, listTop);
+    var row = 0;
+    if (entry) {
+      var ey2 = listTop + 30 + row * ROW_H;
+      ctx.fillStyle = '#ffd34d'; ctx.beginPath();
+      ctx.moveTo(PAD + 10, ey2 - 14); ctx.lineTo(PAD + 19, ey2 - 7); ctx.lineTo(PAD + 10, ey2); ctx.lineTo(PAD + 1, ey2 - 7); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
+      ctx.fillText('▶ ' + entry.name + ' (entry/exit)', PAD + 30, ey2);
+      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
+      ctx.fillText(fmtCoord(entry.lat, entry.lon), PAD + 430, ey2);
+      row++;
+    }
+    pts.forEach(function (p, k) {
+      var ry = listTop + 30 + row * ROW_H; row++;
+      var col = DOT_COL[p.idx % DOT_COL.length];
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
+      ctx.fillText((k + 1) + '. ' + p.name, PAD + 30, ry);
+      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
+      ctx.fillText(fmtCoord(p.lat, p.lon), PAD + 430, ry);
+    });
+
+    // Save
+    var ds = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
+           + '_' + _p(now.getHours()) + '-' + _p(now.getMinutes());
+    saveCanvasToDevice(cv, 'divenav_map_' + ds + '.png', loaded);
+    btn.disabled = false; btn.textContent = btnTxt;
+  }
+}
+
+function saveCanvasToDevice(cv, fname, loaded) {
+  var done = function (blob) {
     if (!blob) { log('Map render failed', 'lerr'); return; }
     var file = null;
     try { file = new File([blob], fname, { type: 'image/png' }); } catch (e) {}
     var shareData = file ? { files: [file], title: 'DiveNav map' } : null;
     if (shareData && navigator.canShare && navigator.canShare(shareData)) {
-      navigator.share(shareData).then(function() {
-        log('Map saved (Save Image → Photos)', 'lok');
-      }).catch(function(err) {
+      navigator.share(shareData).then(function () {
+        log('Map saved' + (loaded ? '' : ' (no imagery)') + ' — Save Image → Photos', 'lok');
+      }).catch(function (err) {
         if (err.name !== 'AbortError') downloadMap(blob, fname);
       });
     } else {
       downloadMap(blob, fname);
     }
-  }, 'image/png');
+  };
+  try {
+    cv.toBlob(done, 'image/png');
+  } catch (e) {
+    // Canvas tainted (a tile lacked CORS) — should not happen with Esri, but
+    // guard anyway so the feature degrades instead of throwing.
+    log('Could not export imagery (CORS) — try again', 'lerr');
+  }
 }
+
+// kept name for backwards compat; just opens the picker now
+function saveWaypointMap() { openEntryModal(); }
 
 function downloadMap(blob, fname) {
   var url = URL.createObjectURL(blob);
@@ -1642,6 +1907,15 @@ function downloadMap(blob, fname) {
 }
 
 document.getElementById('saveMapBtn').addEventListener('click', saveWaypointMap);
+document.getElementById('entrySearch').addEventListener('input', entrySearchInput);
+document.getElementById('entrySearch').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && _entryResults.length) { e.preventDefault(); selectEntry(0); }
+});
+document.getElementById('entryCancelBtn').addEventListener('click', function () {
+  document.getElementById('entryModal').classList.add('hidden');
+});
+document.getElementById('entrySkipBtn').addEventListener('click', function () { entryGenerate(false); });
+document.getElementById('entryGoBtn').addEventListener('click', function () { entryGenerate(true); });
 
 // ── GPS ──
 var _watchId = null;
