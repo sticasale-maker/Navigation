@@ -1474,10 +1474,11 @@ document.getElementById('addBtn').addEventListener('click', function() {
 // ════════════════════════════════════════════════════════════════════
 
 var D2R_M = Math.PI / 180, TILE_SZ = 256;
-// Esri World Imagery — free, no key, CORS-enabled (stays un-tainted so we
-// can export the canvas). URL order is {z}/{y}/{x}.
+// Esri World Topo Map — free, no key, CORS-enabled (stays un-tainted so we
+// can export the canvas). A street/topo MAP view (coastline, roads, place
+// names) rather than satellite imagery. URL order is {z}/{y}/{x}.
 function tileURL(z, x, y) {
-  return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'
+  return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/'
        + z + '/' + y + '/' + x;
 }
 function lon2px(lon, z) { return (lon + 180) / 360 * TILE_SZ * Math.pow(2, z); }
@@ -1648,19 +1649,53 @@ function renderMapImage(entry) {
   if (plotW < 420) { var ax = (420 - plotW) / 2; minGx -= ax; plotW = 420; }
   if (plotH < 360) { var ay = (360 - plotH) / 2; minGy -= ay; plotH = 360; }
 
-  var PAD = 70, HEADER = 150, ROW_H = 34;
-  var listRows = pts.length + (entry ? 1 : 0);
-  var FOOTER = 70 + listRows * ROW_H + 36;
-  var canvasW = Math.round(Math.max(plotW, 540) + 2 * PAD);
+  // ── Total itinerary distance (loop incl. entry at both ends if chosen) ──
+  var totalM = 0;
+  for (var tdi = 1; tdi < path.length; tdi++)
+    totalM += haversine(path[tdi-1].lat, path[tdi-1].lon, path[tdi].lat, path[tdi].lon);
+  var totalD = fmtDist(totalM);
+  var totalStr = totalD.v + totalD.u;
+
+  // ── Layout (kept tight to avoid empty space) ──
+  var PAD = 42, HEADER = 104, ROW_H = 32, COLGAP = 30;
+  var MONO = '"Menlo","Courier New",monospace';
+  var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
+
+  // Scratch context to MEASURE text before committing canvas dimensions, so
+  // the SEQUENCE coords (and header) can never run off the right edge.
+  var cv = document.createElement('canvas');
+  var ctx = cv.getContext('2d');
+
+  var nameMaxW = 0, coordMaxW = 0;
+  function _nameW(s){ ctx.font='bold 22px '+MONO; var w=ctx.measureText(s).width; if(w>nameMaxW)nameMaxW=w; }
+  function _coordW(s){ ctx.font='22px '+MONO; var w=ctx.measureText(s).width; if(w>coordMaxW)coordMaxW=w; }
+  if (entry) { _nameW('> ' + entry.name + ' (entry/exit)'); _coordW(fmtCoord(entry.lat, entry.lon)); }
+  pts.forEach(function (p, k) { _nameW((k+1) + '. ' + p.name); _coordW(fmtCoord(p.lat, p.lon)); });
+  _nameW('TOTAL ROUTE'); _coordW(totalStr);
+
+  // Header strings (measured so the canvas is wide enough for them too).
+  var nowH = new Date();
+  function _ph(n){ return (n<10?'0':'')+n; }
+  var stampH = nowH.getFullYear()+'-'+_ph(nowH.getMonth()+1)+'-'+_ph(nowH.getDate())
+             +'  '+_ph(nowH.getHours())+':'+_ph(nowH.getMinutes());
+  var subStr = stampH + '   ·   ' + pts.length + ' wpt   ·   ' + totalStr + ' loop'
+             + (entry ? '   ·   from ' + entry.name : '');
+  ctx.font = '23px ' + MONO; var subW = ctx.measureText(subStr).width;
+  ctx.font = 'bold 38px ' + MONO; var titleW = ctx.measureText('DIVENAV — DIVE MAP').width;
+
+  var nameColX = PAD + 30;
+  var footerReqW = nameColX + nameMaxW + COLGAP + coordMaxW + PAD;
+  var headerReqW = PAD + Math.max(subW, titleW) + PAD;
+
+  var canvasW = Math.round(Math.max(plotW + 2 * PAD, footerReqW, headerReqW, 480));
+  var listRows = pts.length + (entry ? 1 : 0) + 1;   // +1 = TOTAL ROUTE row
+  var FOOTER = 54 + listRows * ROW_H + 22;
   var canvasH = Math.round(HEADER + plotH + 2 * PAD + FOOTER);
   var boxLeft = Math.round((canvasW - plotW) / 2);
   var boxTop  = HEADER + PAD;
 
-  var cv = document.createElement('canvas');
-  cv.width = canvasW; cv.height = canvasH;
-  var ctx = cv.getContext('2d');
-  var MONO = '"Menlo","Courier New",monospace';
-  var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
+  cv.width = canvasW; cv.height = canvasH;          // resets context state
+  ctx = cv.getContext('2d');
 
   ctx.fillStyle = '#0a0e12';
   ctx.fillRect(0, 0, canvasW, canvasH);
@@ -1704,21 +1739,32 @@ function renderMapImage(entry) {
       for (var gx = boxLeft; gx <= boxLeft + plotW; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, boxTop); ctx.lineTo(gx, boxTop + plotH); ctx.stroke(); }
       for (var gy = boxTop; gy <= boxTop + plotH; gy += 80) { ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke(); }
     }
-    // Slight dark wash so bright overlays read well on imagery.
-    ctx.fillStyle = 'rgba(6,10,14,0.18)';
+    // Very slight wash so bright overlays read on the map without muddying it.
+    ctx.fillStyle = 'rgba(8,12,16,0.06)';
     ctx.fillRect(boxLeft, boxTop, plotW, plotH);
     ctx.restore();
 
     drawOverlays(loaded);
   }).catch(function () { drawOverlays(0); });
 
-  function chip(text, cx, cy, font, color) {
+  function chip(text, cx, cy, font, color, rightAlign) {
     ctx.font = font; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     var w = ctx.measureText(text).width;
+    var x = rightAlign ? cx - w : cx;
     ctx.fillStyle = 'rgba(8,12,16,0.78)';
-    ctx.fillRect(cx - 4, cy - 20, w + 8, 26);
-    ctx.fillStyle = color; ctx.fillText(text, cx, cy);
+    ctx.fillRect(x - 4, cy - 20, w + 8, 26);
+    ctx.fillStyle = color; ctx.fillText(text, x, cy);
     return w;
+  }
+
+  // Decide which side of a marker a label sits on so it never gets clipped
+  // by the plot edge. Returns {x, right}: anchor x and whether to right-align.
+  function pickSide(cx, font, text) {
+    ctx.font = font; var w = ctx.measureText(text).width;
+    var spaceR = (boxLeft + plotW) - (cx + 22) - 4;
+    var spaceL = (cx - 22) - boxLeft - 4;
+    var onLeft = (w > spaceR) && (spaceL > spaceR);
+    return onLeft ? { x: cx - 22, right: true } : { x: cx + 22, right: false };
   }
 
   function drawOverlays(loaded) {
@@ -1727,15 +1773,10 @@ function renderMapImage(entry) {
     ctx.strokeRect(boxLeft, boxTop, plotW, plotH);
 
     // Header
-    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 40px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('DIVENAV — DIVE MAP', PAD, 64);
-    var now = new Date();
-    function _p(n) { return (n < 10 ? '0' : '') + n; }
-    var stamp = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
-              + '  ' + _p(now.getHours()) + ':' + _p(now.getMinutes());
-    ctx.fillStyle = '#4a6070'; ctx.font = '24px ' + MONO;
-    var sub = stamp + '   ·   ' + pts.length + ' waypoints' + (entry ? '   ·   loop from ' + entry.name : '');
-    ctx.fillText(sub, PAD, 100);
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 38px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('DIVENAV — DIVE MAP', PAD, 56);
+    ctx.fillStyle = '#4a6070'; ctx.font = '23px ' + MONO;
+    ctx.fillText(subStr, PAD, 90);
 
     // Clip overlays to the plot rectangle
     ctx.save();
@@ -1774,7 +1815,8 @@ function renderMapImage(entry) {
         ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(yx, yy, 8, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(yx, yy, 15, 0, Math.PI * 2); ctx.stroke();
-        chip('YOU', yx + 20, yy + 6, 'bold 19px ' + MONO, '#ffffff');
+        var ys = pickSide(yx, 'bold 19px ' + MONO, 'YOU');
+        chip('YOU', ys.x, yy + 6, 'bold 19px ' + MONO, '#ffffff', ys.right);
       }
     }
 
@@ -1785,7 +1827,8 @@ function renderMapImage(entry) {
       ctx.beginPath();
       ctx.moveTo(ex, ey - 18); ctx.lineTo(ex + 16, ey); ctx.lineTo(ex, ey + 18); ctx.lineTo(ex - 16, ey);
       ctx.closePath(); ctx.fill(); ctx.stroke();
-      chip('ENTRY / EXIT', ex + 22, ey + 6, 'bold 24px ' + MONO, '#ffd34d');
+      var es = pickSide(ex, 'bold 24px ' + MONO, 'ENTRY / EXIT');
+      chip('ENTRY / EXIT', es.x, ey + 6, 'bold 24px ' + MONO, '#ffd34d', es.right);
     }
 
     // Waypoint dots + labels
@@ -1798,8 +1841,12 @@ function renderMapImage(entry) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(String(k + 1), cx, cy + 1);
       ctx.textBaseline = 'alphabetic';
-      chip(p.name, cx + 22, cy - 5, 'bold 25px ' + MONO, col);
-      chip(fmtCoord(p.lat, p.lon), cx + 22, cy + 19, '19px ' + MONO, '#dfeefa');
+      var coordStr = fmtCoord(p.lat, p.lon);
+      ctx.font = 'bold 25px ' + MONO; var wName = ctx.measureText(p.name).width;
+      ctx.font = '19px ' + MONO;      var wCoord = ctx.measureText(coordStr).width;
+      var ps = pickSide(cx, 'bold 25px ' + MONO, Math.max(wName, wCoord) === wName ? p.name : coordStr);
+      chip(p.name, ps.x, cy - 5, 'bold 25px ' + MONO, col, ps.right);
+      chip(coordStr, ps.x, cy + 19, '19px ' + MONO, '#dfeefa', ps.right);
     });
 
     ctx.restore(); // end plot clip
@@ -1827,43 +1874,52 @@ function renderMapImage(entry) {
     var sbLbl = fmtDist(stepM);
     chip(sbLbl.v + sbLbl.u, sbx + stepPx + 10, sby + 6, '22px ' + MONO, '#ffffff');
 
-    // Attribution (required) + offline note if imagery missing
+    // Attribution (required) + offline note if map tiles missing
     ctx.font = '16px ' + MONO; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    var attr = loaded ? 'Imagery © Esri, Maxar, Earthstar Geographics' : 'No imagery (offline) — schematic only';
+    var attr = loaded ? 'Map © Esri, HERE, Garmin, USGS, NGA' : 'No map tiles (offline) — schematic only';
     var aw = ctx.measureText(attr).width;
     ctx.fillStyle = 'rgba(8,12,16,0.7)'; ctx.fillRect(boxLeft + plotW - aw - 12, boxTop + plotH - 24, aw + 10, 22);
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText(attr, boxLeft + plotW - 6, boxTop + plotH - 7);
 
-    // Sequence list footer
-    var listTop = boxTop + plotH + PAD + 20;
+    // ── Sequence list footer ──
+    var coordX = canvasW - PAD;
+    var listTop = boxTop + plotH + PAD + 14;
     ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(PAD, listTop - 24); ctx.lineTo(canvasW - PAD, listTop - 24); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(PAD, listTop - 22); ctx.lineTo(canvasW - PAD, listTop - 22); ctx.stroke();
     ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('SEQUENCE', PAD, listTop);
     var row = 0;
+    function _rowY() { return listTop + 28 + row * ROW_H; }
     if (entry) {
-      var ey2 = listTop + 30 + row * ROW_H;
+      var ey2 = _rowY();
       ctx.fillStyle = '#ffd34d'; ctx.beginPath();
       ctx.moveTo(PAD + 10, ey2 - 14); ctx.lineTo(PAD + 19, ey2 - 7); ctx.lineTo(PAD + 10, ey2); ctx.lineTo(PAD + 1, ey2 - 7); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
-      ctx.fillText('▶ ' + entry.name + ' (entry/exit)', PAD + 30, ey2);
-      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
-      ctx.fillText(fmtCoord(entry.lat, entry.lon), PAD + 430, ey2);
+      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'left';
+      ctx.fillText('> ' + entry.name + ' (entry/exit)', PAD + 30, ey2);
+      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillText(fmtCoord(entry.lat, entry.lon), coordX, ey2);
       row++;
     }
     pts.forEach(function (p, k) {
-      var ry = listTop + 30 + row * ROW_H; row++;
+      var ry = _rowY(); row++;
       var col = DOT_COL[p.idx % DOT_COL.length];
       ctx.fillStyle = col; ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO;
+      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'left';
       ctx.fillText((k + 1) + '. ' + p.name, PAD + 30, ry);
-      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO;
-      ctx.fillText(fmtCoord(p.lat, p.lon), PAD + 430, ry);
+      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillText(fmtCoord(p.lat, p.lon), coordX, ry);
     });
+    // Total route distance row
+    var ty = _rowY();
+    ctx.strokeStyle = 'rgba(0,212,255,0.15)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD, ty - 22); ctx.lineTo(canvasW - PAD, ty - 22); ctx.stroke();
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'left';
+    ctx.fillText('TOTAL ROUTE' + (entry ? ' (loop)' : ''), PAD + 30, ty);
+    ctx.textAlign = 'right'; ctx.fillText(totalStr, coordX, ty);
 
     // Save
-    var ds = now.getFullYear() + '-' + _p(now.getMonth() + 1) + '-' + _p(now.getDate())
-           + '_' + _p(now.getHours()) + '-' + _p(now.getMinutes());
+    var ds = nowH.getFullYear() + '-' + _ph(nowH.getMonth() + 1) + '-' + _ph(nowH.getDate())
+           + '_' + _ph(nowH.getHours()) + '-' + _ph(nowH.getMinutes());
     saveCanvasToDevice(cv, 'divenav_map_' + ds + '.png', loaded);
     btn.disabled = false; btn.textContent = btnTxt;
   }
