@@ -707,6 +707,18 @@ footer#loggerFooter {
   </div>
 </div>
 
+<!-- ── Map preview (review the rendered image before sending) ── -->
+<div id="mapPreviewModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:320;padding:14px;">
+  <div style="font-family:'Share Tech Mono',monospace;color:var(--accent,#00d4ff);letter-spacing:2px;font-size:13px;margin-bottom:10px;">MAP PREVIEW — REVIEW BEFORE SENDING</div>
+  <div style="flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;overflow:auto;">
+    <img id="mapPreviewImg" alt="map preview" style="max-width:100%;max-height:72vh;border:1px solid rgba(0,212,255,0.4);border-radius:8px;box-shadow:0 6px 30px rgba(0,0,0,0.6);">
+  </div>
+  <div style="display:flex;gap:12px;margin-top:14px;width:100%;max-width:460px;">
+    <button id="mapPreviewClose" class="modal-btn cancel" style="flex:1;">✕ CLOSE</button>
+    <button id="mapPreviewSend" class="modal-btn confirm" style="flex:2;">📤 SEND / SAVE</button>
+  </div>
+</div>
+
 <main id="mainContent">
   <!-- Fix freshness — the first thing visible through the box lid -->
   <div id="freshBanner">
@@ -1487,6 +1499,32 @@ function lat2px(lat, z) {
   return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TILE_SZ * Math.pow(2, z);
 }
 
+// ── Optional ArcGIS dynamic overlays (e.g. NSW SEED) ────────────────
+// Each overlay is one ArcGIS MapServer fetched via its /export endpoint for
+// the plot's Web-Mercator bbox, then composited over the basemap. To use the
+// SEED layers from a "show on map" deep-link, resolve each portalItem to its
+// MapServer REST URL (open the SEED dataset → "ArcGIS REST Service" resource)
+// and add: { url:'…/MapServer', layers:'show:0,1,2' }.
+// IMPORTANT: NSW gov servers may not send CORS headers. If a layer can't be
+// drawn without tainting the canvas, it is skipped automatically and the
+// basemap export still succeeds (see previewMap's taint guard).
+var MAP_OVERLAYS = [
+  // { url:'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/<Folder>/<Service>/MapServer', layers:'show:2' },
+];
+var _lastEntry = null;            // remembered so we can re-render if needed
+function lon2merc(lon) { return lon * 20037508.342789244 / 180; }
+function lat2merc(lat) {
+  var y = Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180);
+  return y * 20037508.342789244 / 180;
+}
+function arcgisExportURL(lyr, bbox, w, h) {
+  return lyr.url.replace(/\/+$/, '') + '/export?bbox=' + bbox.join(',')
+       + '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h
+       + '&format=png32&transparent=true&dpi=96'
+       + (lyr.layers ? '&layers=' + encodeURIComponent(lyr.layers) : '')
+       + '&f=image';
+}
+
 // ── Entry-point picker (typeahead via Photon geocoder) ──────────────
 var _entrySel = null, _entryTimer = null, _entryResults = [];
 
@@ -1613,6 +1651,7 @@ function renderMapImage(entry) {
       pts.push({ name: wp.name, lat: wp.lat, lon: wp.lon, idx: i });
   });
   if (pts.length === 0) { log('No positioned waypoints to map yet', 'lerr'); return; }
+  _lastEntry = entry;
 
   var btn = document.getElementById('saveMapBtn');
   var btnTxt = btn.textContent;
@@ -1633,21 +1672,30 @@ function renderMapImage(entry) {
   });
   // Margin so markers aren't on the edge and you see surrounding coast.
   var dLat = maxLat - minLat, dLon = maxLon - minLon;
-  var mLat = Math.max(dLat * 0.22, 0.0010), mLon = Math.max(dLon * 0.22, 0.0010);
+  var mLat = Math.max(dLat * 0.20, 0.0010), mLon = Math.max(dLon * 0.20, 0.0010);
   minLat -= mLat; maxLat += mLat; minLon -= mLon; maxLon += mLon;
 
-  // Pick the highest zoom whose pixel span fits the target plot size.
-  var MAXPX = 1280, z;
+  // The map fills the image width, so cap how TALL it can get relative to its
+  // width by widening the longitude span for tall/narrow routes.
+  var MAX_ASPECT = 0.78;                       // plot height <= 0.78 * width
+  var spW0 = (maxLon - minLon) * (TILE_SZ / 360);
+  var spH0 = lat2px(minLat, 0) - lat2px(maxLat, 0);
+  if (spH0 / spW0 > MAX_ASPECT) {
+    var addLon = (spH0 / MAX_ASPECT - spW0) / (TILE_SZ / 360);
+    minLon -= addLon / 2; maxLon += addLon / 2;
+  }
+
+  // Highest zoom whose NATIVE pixel span stays under a tile-count cap; the
+  // region is then scaled up/down to exactly fill the image width (PLOT_W).
+  var TILECAP = 1300, z;
   for (z = 19; z >= 3; z--) {
     var w = lon2px(maxLon, z) - lon2px(minLon, z);
     var h = lat2px(minLat, z) - lat2px(maxLat, z);
-    if (w <= MAXPX && h <= MAXPX) break;
+    if (w <= TILECAP && h <= TILECAP) break;
   }
   var minGx = lon2px(minLon, z), maxGx = lon2px(maxLon, z);
   var minGy = lat2px(maxLat, z), maxGy = lat2px(minLat, z); // y grows southward
-  var plotW = Math.ceil(maxGx - minGx), plotH = Math.ceil(maxGy - minGy);
-  if (plotW < 420) { var ax = (420 - plotW) / 2; minGx -= ax; plotW = 420; }
-  if (plotH < 360) { var ay = (360 - plotH) / 2; minGy -= ay; plotH = 360; }
+  var nativeW = Math.max(maxGx - minGx, 1), nativeH = Math.max(maxGy - minGy, 1);
 
   // ── Total itinerary distance (loop incl. entry at both ends if chosen) ──
   var totalM = 0;
@@ -1687,11 +1735,17 @@ function renderMapImage(entry) {
   var footerReqW = nameColX + nameMaxW + COLGAP + coordMaxW + PAD;
   var headerReqW = PAD + Math.max(subW, titleW) + PAD;
 
-  var canvasW = Math.round(Math.max(plotW + 2 * PAD, footerReqW, headerReqW, 480));
+  // The map fills the full content width (a big base width, widened further if
+  // the header/footer text needs more room). The region scales to that width.
+  var BASE_MAP_W = 1180;
+  var canvasW = Math.round(Math.max(BASE_MAP_W + 2 * PAD, footerReqW, headerReqW, 480));
+  var plotW = canvasW - 2 * PAD;                  // map spans the whole width
+  var scale = plotW / nativeW;
+  var plotH = Math.round(nativeH * scale);
   var listRows = pts.length + (entry ? 1 : 0) + 1;   // +1 = TOTAL ROUTE row
   var FOOTER = 54 + listRows * ROW_H + 22;
   var canvasH = Math.round(HEADER + plotH + 2 * PAD + FOOTER);
-  var boxLeft = Math.round((canvasW - plotW) / 2);
+  var boxLeft = PAD;
   var boxTop  = HEADER + PAD;
 
   cv.width = canvasW; cv.height = canvasH;          // resets context state
@@ -1700,13 +1754,13 @@ function renderMapImage(entry) {
   ctx.fillStyle = '#0a0e12';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  function CX(lon) { return boxLeft + (lon2px(lon, z) - minGx); }
-  function CY(lat) { return boxTop + (lat2px(lat, z) - minGy); }
+  function CX(lon) { return boxLeft + (lon2px(lon, z) - minGx) * scale; }
+  function CY(lat) { return boxTop  + (lat2px(lat, z) - minGy) * scale; }
 
-  // Load the satellite tiles covering the plot region.
+  // Load the basemap tiles covering the plot region (native tile grid).
   var maxIdx = Math.pow(2, z) - 1;
-  var txMin = Math.floor(minGx / TILE_SZ), txMax = Math.floor((minGx + plotW) / TILE_SZ);
-  var tyMin = Math.floor(minGy / TILE_SZ), tyMax = Math.floor((minGy + plotH) / TILE_SZ);
+  var txMin = Math.floor(minGx / TILE_SZ), txMax = Math.floor(maxGx / TILE_SZ);
+  var tyMin = Math.floor(minGy / TILE_SZ), tyMax = Math.floor(maxGy / TILE_SZ);
   var jobs = [];
   for (var tx = txMin; tx <= txMax; tx++) {
     for (var ty = tyMin; ty <= tyMax; ty++) {
@@ -1723,13 +1777,29 @@ function renderMapImage(entry) {
     }
   }
 
-  Promise.all(jobs).then(function (tiles) {
+  // Optional SEED / ArcGIS dynamic overlays for the same bbox (skipped if off
+  // or if they fail to load). One /export image per overlay, drawn to the plot.
+  var bbox3857 = [lon2merc(minLon), lat2merc(minLat), lon2merc(maxLon), lat2merc(maxLat)];
+  var ovW = Math.min(Math.round(nativeW), 2048), ovH = Math.min(Math.round(nativeH), 2048);
+  var ovList = window._mapOverlaysOff ? [] : MAP_OVERLAYS;
+  var ovJobs = ovList.map(function (lyr) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { resolve(null); };
+      img.src = arcgisExportURL(lyr, bbox3857, ovW, ovH);
+    });
+  });
+
+  Promise.all([Promise.all(jobs), Promise.all(ovJobs)]).then(function (res) {
+    var tiles = res[0], ovs = res[1];
     var loaded = 0;
     ctx.save();
     ctx.beginPath(); ctx.rect(boxLeft, boxTop, plotW, plotH); ctx.clip();
     tiles.forEach(function (t) {
       if (!t) return;
-      ctx.drawImage(t.img, boxLeft + (t.tx * TILE_SZ - minGx), boxTop + (t.ty * TILE_SZ - minGy));
+      ctx.drawImage(t.img, boxLeft + (t.tx * TILE_SZ - minGx) * scale, boxTop + (t.ty * TILE_SZ - minGy) * scale, TILE_SZ * scale + 1, TILE_SZ * scale + 1);
       loaded++;
     });
     if (loaded === 0) {
@@ -1739,6 +1809,10 @@ function renderMapImage(entry) {
       for (var gx = boxLeft; gx <= boxLeft + plotW; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, boxTop); ctx.lineTo(gx, boxTop + plotH); ctx.stroke(); }
       for (var gy = boxTop; gy <= boxTop + plotH; gy += 80) { ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke(); }
     }
+    // SEED / ArcGIS overlays composited over the basemap.
+    var ovDrawn = 0;
+    ovs.forEach(function (oimg) { if (oimg) { ctx.drawImage(oimg, boxLeft, boxTop, plotW, plotH); ovDrawn++; } });
+    if (ovList.length && !ovDrawn) log('Overlay layers did not load (offline or blocked)', 'lerr');
     // Very slight wash so bright overlays read on the map without muddying it.
     ctx.fillStyle = 'rgba(8,12,16,0.06)';
     ctx.fillRect(boxLeft, boxTop, plotW, plotH);
@@ -1861,7 +1935,7 @@ function renderMapImage(entry) {
 
     // Scale bar (metres-per-pixel varies with latitude in Mercator)
     var centerLat = (minLat + maxLat) / 2;
-    var mpp = 156543.03392 * Math.cos(centerLat * D2R_M) / Math.pow(2, z);
+    var mpp = (156543.03392 * Math.cos(centerLat * D2R_M) / Math.pow(2, z)) / scale;
     var niceSteps = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
     var targetM = 170 * mpp, stepM = niceSteps[niceSteps.length - 1];
     for (var s = 0; s < niceSteps.length; s++) { if (niceSteps[s] >= targetM) { stepM = niceSteps[s]; break; } }
@@ -1920,9 +1994,29 @@ function renderMapImage(entry) {
     // Save
     var ds = nowH.getFullYear() + '-' + _ph(nowH.getMonth() + 1) + '-' + _ph(nowH.getDate())
            + '_' + _ph(nowH.getHours()) + '-' + _ph(nowH.getMinutes());
-    saveCanvasToDevice(cv, 'divenav_map_' + ds + '.png', loaded);
+    previewMap(cv, 'divenav_map_' + ds + '.png', loaded);
     btn.disabled = false; btn.textContent = btnTxt;
   }
+}
+
+var _pendingSave = null;
+function previewMap(cv, fname, loaded) {
+  var img = document.getElementById('mapPreviewImg');
+  try {
+    img.src = cv.toDataURL('image/png');   // throws SecurityError if tainted
+  } catch (e) {
+    // A non-CORS overlay tainted the canvas → drop overlays and re-render.
+    if (!window._mapOverlaysOff && MAP_OVERLAYS.length) {
+      window._mapOverlaysOff = true;
+      log('Overlay blocked canvas export (no CORS) — basemap only', 'lerr');
+      renderMapImage(_lastEntry);
+      return;
+    }
+    log('Could not export map (CORS) — try again', 'lerr');
+    return;
+  }
+  _pendingSave = { cv: cv, fname: fname, loaded: loaded };
+  document.getElementById('mapPreviewModal').classList.remove('hidden');
 }
 
 function saveCanvasToDevice(cv, fname, loaded) {
@@ -1972,6 +2066,17 @@ document.getElementById('entryCancelBtn').addEventListener('click', function () 
 });
 document.getElementById('entrySkipBtn').addEventListener('click', function () { entryGenerate(false); });
 document.getElementById('entryGoBtn').addEventListener('click', function () { entryGenerate(true); });
+document.getElementById('mapPreviewClose').addEventListener('click', function () {
+  document.getElementById('mapPreviewModal').classList.add('hidden');
+  _pendingSave = null;
+});
+document.getElementById('mapPreviewSend').addEventListener('click', function () {
+  document.getElementById('mapPreviewModal').classList.add('hidden');
+  if (_pendingSave) {
+    saveCanvasToDevice(_pendingSave.cv, _pendingSave.fname, _pendingSave.loaded);
+    _pendingSave = null;
+  }
+});
 
 // ── GPS ──
 var _watchId = null;
