@@ -460,6 +460,15 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 #instrModal.hidden { display: none !important; }
 #entryModal.hidden { display: none !important; }
 #mapPreviewModal.hidden { display: none !important; }
+#libraryModal.hidden { display: none !important; }
+.btn-library {
+  width: 100%; padding: 14px; margin-top: 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 15px; letter-spacing: 2px;
+  border-radius: 10px; border: 1px solid rgba(0,212,255,0.35);
+  background: rgba(0,212,255,0.06); color: var(--accent); cursor: pointer;
+}
+.btn-library:active { background: rgba(0,212,255,0.14); }
 
 /* ---- Data Logger Footer ---- */
 footer#loggerFooter {
@@ -720,6 +729,22 @@ footer#loggerFooter {
   </div>
 </div>
 
+<!-- ── Waypoint library ── -->
+<div id="libraryModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.80);display:flex;align-items:flex-start;justify-content:center;z-index:310;padding:50px 16px 16px;">
+  <div class="modal-box" style="max-width:440px;gap:10px;">
+    <div class="modal-title">WAYPOINT LIBRARY</div>
+    <div class="modal-note">Every waypoint with coordinates is stored here permanently. Deleting from the main screen never removes it from here. Tap entries to select, then add to the plan.</div>
+    <div class="field-group">
+      <input class="field-input" id="libSearch" type="text" inputmode="search" placeholder="filter by name…" autocomplete="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div id="libList" style="display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow-y:auto;"></div>
+    <div class="modal-btns">
+      <button class="modal-btn cancel" id="libCloseBtn">CLOSE</button>
+      <button class="modal-btn confirm" id="libAddBtn" disabled style="opacity:0.4;">ADD TO PLAN</button>
+    </div>
+  </div>
+</div>
+
 <main id="mainContent">
   <!-- Fix freshness — the first thing visible through the box lid -->
   <div id="freshBanner">
@@ -750,6 +775,7 @@ footer#loggerFooter {
   </div>
 
   <button class="btn-add" id="addBtn">+ ADD WAYPOINT</button>
+  <button class="btn-library" id="libraryBtn">📚 LIBRARY</button>
   <button class="btn-savemap" id="saveMapBtn">🗺 SAVE MAP</button>
   <div id="log"><span class="linf">Tap START…</span></div>
 </main>
@@ -1061,6 +1087,7 @@ function openDB(cb) {
 }
 
 function saveWPs() {
+  syncLibrary(); // assigns ids + upserts coord'd waypoints into library BEFORE serialising
   try { localStorage.setItem('divenav_wps', JSON.stringify(wps)); } catch(e) {}
   openDB(function(db) {
     if (!db) return;
@@ -1124,6 +1151,21 @@ openDB(function(db) {
     var req2 = tx2.objectStore('gpslog').count();
     req2.onsuccess = function() { updateLogUI(req2.result); };
   } catch(e) {}
+  // Reconcile waypoint library (merge DB copy with localStorage copy by id, newest wins)
+  try {
+    var tx3 = db.transaction(DB_STORE, 'readonly');
+    var req3 = tx3.objectStore(DB_STORE).get(LIB_KEY);
+    req3.onsuccess = function() {
+      if (req3.result) {
+        try {
+          var dbLib = JSON.parse(req3.result);
+          if (dbLib && dbLib.length) mergeLibrary(dbLib);
+        } catch(e) {}
+      }
+      syncLibrary(); // seed library from any existing on-screen waypoints
+    };
+    req3.onerror = function() { syncLibrary(); };
+  } catch(e) { syncLibrary(); }
 });
 var colorClasses = ['c1','c2','c3','c4'];
 
@@ -1470,9 +1512,227 @@ document.getElementById('modal').addEventListener('click', function(e) {
 
 // ── Add waypoint ──
 document.getElementById('addBtn').addEventListener('click', function() {
-  wps.push({ name: 'WP '+(wps.length+1), lat: null, lon: null });
+  wps.push({ id: wpUID(), name: 'WP '+(wps.length+1), lat: null, lon: null });
   saveWPs(); render();
 });
+
+// ════════════════════════════════════════════════════════════════════
+//  WAYPOINT LIBRARY
+//  Permanent store of every waypoint that ever had coordinates.
+//  - saveWPs() upserts coord'd screen waypoints into the library (by id)
+//  - deleting from the screen NEVER touches the library
+//  - deleting inside the library is permanent (two-tap confirm),
+//    but only allowed when the entry is not currently on the plan
+//    (otherwise the next saveWPs() would just resurrect it)
+//  Stored as a JSON blob under LIB_KEY in the existing DB_STORE —
+//  deliberately no IndexedDB version bump (stale PWA instances holding
+//  the old version would block the upgrade on iOS).
+// ════════════════════════════════════════════════════════════════════
+var LIB_KEY = 'library';
+
+function wpUID() {
+  return 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function loadLibrary() {
+  try {
+    var s = localStorage.getItem('divenav_library');
+    if (s) return JSON.parse(s);
+  } catch(e) {}
+  return [];
+}
+var lib = loadLibrary();
+
+function saveLibrary() {
+  try { localStorage.setItem('divenav_library', JSON.stringify(lib)); } catch(e) {}
+  openDB(function(db) {
+    if (!db) return;
+    try {
+      var tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put(JSON.stringify(lib), LIB_KEY);
+    } catch(e) {}
+  });
+}
+
+function mergeLibrary(dbLib) {
+  var byId = {};
+  lib.forEach(function(e) { if (e && e.id) byId[e.id] = e; });
+  dbLib.forEach(function(e) {
+    if (!e || !e.id) return;
+    var cur = byId[e.id];
+    if (!cur || (e.updated || 0) > (cur.updated || 0)) byId[e.id] = e;
+  });
+  lib = Object.keys(byId).map(function(k) { return byId[k]; });
+}
+
+function syncLibrary() {
+  var changed = false;
+  for (var i = 0; i < wps.length; i++) {
+    var w = wps[i];
+    if (w.lat === null || w.lon === null || w.lat === undefined || w.lon === undefined) continue;
+    if (!w.id) { w.id = wpUID(); changed = true; }
+    var found = null;
+    for (var j = 0; j < lib.length; j++) {
+      if (lib[j].id === w.id) { found = lib[j]; break; }
+    }
+    if (found) {
+      if (found.name !== w.name || found.lat !== w.lat || found.lon !== w.lon) {
+        found.name = w.name; found.lat = w.lat; found.lon = w.lon;
+        found.updated = Date.now();
+        changed = true;
+      }
+    } else {
+      lib.push({ id: w.id, name: w.name, lat: w.lat, lon: w.lon, created: Date.now(), updated: Date.now() });
+      changed = true;
+    }
+  }
+  if (changed) saveLibrary();
+}
+
+// ── Library modal ──
+var libSel = {};      // id -> selected
+var libDelArm = null; // id armed for delete confirm
+
+function openLibrary() {
+  libSel = {}; libDelArm = null;
+  document.getElementById('libSearch').value = '';
+  renderLibrary();
+  document.getElementById('libraryModal').classList.remove('hidden');
+}
+function closeLibrary() {
+  document.getElementById('libraryModal').classList.add('hidden');
+}
+function fmtLibDist(m) {
+  return m < 1000 ? Math.round(m) + 'm' : (m / 1000).toFixed(1) + 'km';
+}
+
+function renderLibrary() {
+  var listEl = document.getElementById('libList');
+  listEl.innerHTML = '';
+  var filter = document.getElementById('libSearch').value.trim().toLowerCase();
+
+  var onPlan = {};
+  wps.forEach(function(w) { if (w.id) onPlan[w.id] = true; });
+
+  var entries = lib.slice();
+  entries.forEach(function(e) {
+    e._dist = myPos ? haversine(myPos.lat, myPos.lon, e.lat, e.lon) : null;
+  });
+  if (myPos) entries.sort(function(a, b) { return (a._dist || 9e9) - (b._dist || 9e9); });
+  else entries.sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+  var shown = 0;
+  entries.forEach(function(e) {
+    if (filter && e.name.toLowerCase().indexOf(filter) === -1) return;
+    shown++;
+    var planned = !!onPlan[e.id];
+    var sel = !!libSel[e.id];
+
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;border:1px solid ' +
+      (sel ? 'var(--accent)' : 'var(--border)') + ';background:' + (sel ? 'rgba(0,212,255,0.08)' : 'transparent') +
+      ';cursor:pointer;' + (planned ? 'opacity:0.45;' : '');
+    if (!planned) row.setAttribute('data-id', e.id);
+
+    var left = document.createElement('div');
+    left.style.cssText = 'min-width:0;flex:1;';
+    var nm = document.createElement('div');
+    nm.style.cssText = "font-family:'Share Tech Mono',monospace;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    nm.textContent = e.name;
+    var sub = document.createElement('div');
+    sub.style.cssText = "font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--muted);margin-top:2px;";
+    sub.textContent = e.lat.toFixed(5) + ', ' + e.lon.toFixed(5) + (e._dist !== null ? ' \u00b7 ' + fmtLibDist(e._dist) : '');
+    left.appendChild(nm); left.appendChild(sub);
+    row.appendChild(left);
+
+    var right = document.createElement('div');
+    right.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0;';
+    if (planned) {
+      var tag = document.createElement('span');
+      tag.style.cssText = "font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;color:var(--accent2);border:1px solid rgba(0,255,157,0.4);border-radius:6px;padding:3px 6px;";
+      tag.textContent = 'ON PLAN';
+      right.appendChild(tag);
+    } else {
+      var armed = (libDelArm === e.id);
+      var del = document.createElement('button');
+      del.style.cssText = "font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1px;padding:6px 8px;border-radius:6px;cursor:pointer;background:transparent;border:1px solid " +
+        (armed ? 'rgba(255,107,53,0.9);color:var(--warn);' : 'var(--border);color:var(--muted);');
+      del.textContent = armed ? 'SURE?' : 'DEL';
+      del.setAttribute('data-del', e.id);
+      right.appendChild(del);
+    }
+    row.appendChild(right);
+    listEl.appendChild(row);
+  });
+
+  if (!shown) {
+    var empty = document.createElement('div');
+    empty.style.cssText = "font-family:'Share Tech Mono',monospace;font-size:12px;color:var(--muted);padding:14px;text-align:center;line-height:1.5;";
+    empty.textContent = lib.length ? 'No matches' : 'Library is empty — waypoints are saved here automatically once they have coordinates';
+    listEl.appendChild(empty);
+  }
+
+  var n = 0;
+  for (var k in libSel) { if (libSel[k]) n++; }
+  var addToPlanBtn = document.getElementById('libAddBtn');
+  addToPlanBtn.disabled = (n === 0);
+  addToPlanBtn.style.opacity = (n === 0) ? '0.4' : '1';
+  addToPlanBtn.textContent = (n === 0) ? 'ADD TO PLAN' : 'ADD ' + n + ' TO PLAN';
+}
+
+document.getElementById('libList').addEventListener('click', function(e) {
+  var t = e.target;
+  var delId = (t.getAttribute) ? t.getAttribute('data-del') : null;
+  if (delId) {
+    if (libDelArm === delId) {
+      lib = lib.filter(function(x) { return x.id !== delId; });
+      delete libSel[delId];
+      libDelArm = null;
+      saveLibrary();
+      log('Library entry deleted', 'lerr');
+    } else {
+      libDelArm = delId;
+    }
+    renderLibrary();
+    return;
+  }
+  var node = t;
+  while (node && node !== this) {
+    var id = (node.getAttribute) ? node.getAttribute('data-id') : null;
+    if (id) {
+      libSel[id] = !libSel[id];
+      libDelArm = null;
+      renderLibrary();
+      return;
+    }
+    node = node.parentNode;
+  }
+  if (libDelArm !== null) { libDelArm = null; renderLibrary(); }
+});
+
+document.getElementById('libAddBtn').addEventListener('click', function() {
+  var onPlan = {};
+  wps.forEach(function(w) { if (w.id) onPlan[w.id] = true; });
+  var added = 0;
+  lib.forEach(function(e) {
+    if (libSel[e.id] && !onPlan[e.id]) {
+      wps.push({ id: e.id, name: e.name, lat: e.lat, lon: e.lon });
+      added++;
+    }
+  });
+  if (added) {
+    saveWPs(); render();
+    log(added + ' waypoint' + (added > 1 ? 's' : '') + ' added from library', 'lok');
+  }
+  closeLibrary();
+});
+
+document.getElementById('libCloseBtn').addEventListener('click', closeLibrary);
+document.getElementById('libraryModal').addEventListener('click', function(e) {
+  if (e.target === this) closeLibrary();
+});
+document.getElementById('libSearch').addEventListener('input', renderLibrary);
+document.getElementById('libraryBtn').addEventListener('click', openLibrary);
 
 // ════════════════════════════════════════════════════════════════════
 //  SAVE MAP
