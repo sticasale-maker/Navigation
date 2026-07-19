@@ -2567,26 +2567,64 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
     });
     gpx += '  </trkseg></trk>\n</gpx>';
 
-    // ── Build KML (opens in Google Maps with accuracy visible on each point) ──
+    // ── Build KML — deduped runs, accuracy colour-coding, track line, local times ──
+    function kmlPad(n) { return (n < 10 ? '0' : '') + n; }
+    function kmlLocalDate(iso) {
+      var d = new Date(iso);
+      return d.getFullYear() + '-' + kmlPad(d.getMonth()+1) + '-' + kmlPad(d.getDate());
+    }
+    function kmlLocalTime(iso) {
+      var d = new Date(iso);
+      return kmlPad(d.getHours()) + ':' + kmlPad(d.getMinutes()) + ':' + kmlPad(d.getSeconds());
+    }
+    function kmlDur(ms) {
+      var s = Math.round(ms/1000), m = Math.floor(s/60);
+      return (m ? m + 'm ' : '') + (s % 60) + 's';
+    }
+    // Collapse consecutive identical fixes (same coords + accuracy) into runs
+    var kmlRuns = [];
+    fixes.forEach(function(f) {
+      var last = kmlRuns[kmlRuns.length-1];
+      if (last && last.lat === f.lat && last.lon === f.lon &&
+          Math.round(last.acc) === Math.round(f.acc)) {
+        last.n++; last.tsEnd = f.ts;
+      } else {
+        kmlRuns.push({ lat: f.lat, lon: f.lon, acc: f.acc, ts: f.ts, tsEnd: f.ts, n: 1 });
+      }
+    });
+    function kmlAccStyle(acc) { return acc <= 15 ? '#dotGood' : (acc <= 100 ? '#dotMid' : '#dotBad'); }
+
+    var KML_ICON = '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>';
     var kml = '<?xml version="1.0" encoding="UTF-8"?>\n';
     kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n';
-    kml += '  <name>DiveNav Log ' + new Date().toISOString().slice(0,10) + '</name>\n';
-    kml += '  <Style id="dot"><IconStyle><color>ff00d4ff</color><scale>0.6</scale>';
-    kml += '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>';
-    kml += '</IconStyle></Style>\n';
-    fixes.forEach(function(f, idx) {
-      var t = f.ts.replace('T',' ').slice(0,19);
-      var accRounded = Math.round(f.acc);
+    kml += '  <name>DiveNav Log ' + kmlLocalDate(fixes[0].ts) + '</name>\n';
+    // KML colours are aabbggrr: green / orange / red dots, cyan track
+    kml += '  <Style id="dotGood"><IconStyle><color>ff00ff00</color><scale>0.7</scale>' + KML_ICON + '</IconStyle></Style>\n';
+    kml += '  <Style id="dotMid"><IconStyle><color>ff00a5ff</color><scale>0.8</scale>' + KML_ICON + '</IconStyle></Style>\n';
+    kml += '  <Style id="dotBad"><IconStyle><color>ff0000ff</color><scale>1.0</scale>' + KML_ICON + '</IconStyle></Style>\n';
+    kml += '  <Style id="trackLine"><LineStyle><color>ffffd400</color><width>2</width></LineStyle></Style>\n';
+
+    // Track line through the deduped points, in time order
+    kml += '  <Placemark>\n    <name>Track</name>\n    <styleUrl>#trackLine</styleUrl>\n';
+    kml += '    <LineString><tessellate>1</tessellate><coordinates>\n';
+    kmlRuns.forEach(function(r) { kml += '      ' + r.lon + ',' + r.lat + ',0\n'; });
+    kml += '    </coordinates></LineString>\n  </Placemark>\n';
+
+    kmlRuns.forEach(function(r) {
+      var acc = Math.round(r.acc);
+      var held = r.n > 1;
       kml += '  <Placemark>\n';
-      kml += '    <styleUrl>#dot</styleUrl>\n';
-      kml += '    <name>\xb1' + accRounded + 'm</name>\n';
+      kml += '    <styleUrl>' + kmlAccStyle(acc) + '</styleUrl>\n';
+      kml += '    <name>\xb1' + acc + 'm' + (held ? ' \xb7 ' + r.n + ' fixes' : '') + '</name>\n';
       kml += '    <description><![CDATA[';
-      kml += '<b>GPS Accuracy:</b> \xb1' + accRounded + 'm<br/>';
-      kml += '<b>Time:</b> ' + t + '<br/>';
-      kml += '<b>Lat:</b> ' + f.lat.toFixed(6) + '<br/>';
-      kml += '<b>Lon:</b> ' + f.lon.toFixed(6);
+      kml += '<b>GPS Accuracy:</b> \xb1' + acc + 'm<br/>';
+      kml += '<b>Date:</b> ' + kmlLocalDate(r.ts) + '<br/>';
+      kml += '<b>Time (local):</b> ' + kmlLocalTime(r.ts) + (held ? ' \u2192 ' + kmlLocalTime(r.tsEnd) : '') + '<br/>';
+      if (held) kml += '<b>Held for:</b> ' + kmlDur(new Date(r.tsEnd) - new Date(r.ts)) + ' (' + r.n + ' fixes \u2014 frozen or stationary)<br/>';
+      kml += '<b>Lat:</b> ' + r.lat.toFixed(6) + '<br/>';
+      kml += '<b>Lon:</b> ' + r.lon.toFixed(6);
       kml += ']]></description>\n';
-      kml += '    <Point><coordinates>' + f.lon + ',' + f.lat + ',0</coordinates></Point>\n';
+      kml += '    <Point><coordinates>' + r.lon + ',' + r.lat + ',0</coordinates></Point>\n';
       kml += '  </Placemark>\n';
     });
     kml += '</Document>\n</kml>';
