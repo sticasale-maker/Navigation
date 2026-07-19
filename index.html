@@ -1027,9 +1027,21 @@ function absorbEvent(e) {
   e.stopImmediatePropagation();
 }
 
+function blockScroll(e) {
+  e.preventDefault();
+}
+
 function enterDiveLock() {
   diveLocked = true;
+  // jump to top so the nav display is fully visible, then freeze scrolling
+  var mc = document.getElementById('mainContent');
+  mc.scrollTop = 0;
+  window.scrollTo(0, 0);
+  mc.style.overflowY = 'hidden';
+  document.addEventListener('touchmove', blockScroll, { capture: true, passive: false });
   document.getElementById('diveLockShield').style.display = 'block';
+  // auto-start the data logger with the lock
+  if (!loggerActive) startLogger();
   var btn = document.getElementById('lockBtn');
   btn.textContent = '🔓 UNLOCK';
   btn.classList.add('locked');
@@ -1039,7 +1051,12 @@ function enterDiveLock() {
 
 function exitDiveLock() {
   diveLocked = false;
+  var mc = document.getElementById('mainContent');
+  mc.style.overflowY = 'auto';
+  document.removeEventListener('touchmove', blockScroll, { capture: true });
   document.getElementById('diveLockShield').style.display = 'none';
+  // stop the data logger with the unlock
+  if (loggerActive) stopLogger();
   var btn = document.getElementById('lockBtn');
   btn.textContent = '🔒 LOCK';
   btn.classList.remove('locked');
