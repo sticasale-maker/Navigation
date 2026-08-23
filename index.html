@@ -103,13 +103,20 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 .wp-card.c4 { --card-color: #ee5a9b; }
 .wp-card.dragging { opacity: 0.9; box-shadow: 0 8px 24px rgba(0,0,0,0.55); }
 .wp-drag {
-  font-size: 18px; line-height: 1; color: var(--muted);
-  padding: 2px 4px 2px 0; margin-right: 2px;
+  /* Drawn, not typed: the braille "grip" glyph is missing from several
+     Android font stacks, which made the handle invisible. */
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  width: 30px; height: 34px; padding: 0 8px 0 2px;
   cursor: grab; touch-action: none;
   user-select: none; -webkit-user-select: none;
-  flex-shrink: 0;
+  flex-shrink: 0; box-sizing: border-box;
 }
-.wp-drag:active { cursor: grabbing; color: var(--text); }
+.wp-drag span {
+  display: block; height: 2px; border-radius: 2px;
+  background: var(--muted); opacity: 0.85;
+}
+.wp-drag:active { cursor: grabbing; }
+.wp-drag:active span { background: var(--card-color, var(--text)); opacity: 1; }
 
 /* card top row: name + buttons */
 .wp-top {
@@ -406,7 +413,7 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
 }
 
 /* ── Lock button in header ── */
-#instrBtn {
+#instrBtn, #sendCfgBtn {
   font-family: 'Share Tech Mono', monospace;
   font-size: 10px; letter-spacing: 1.5px;
   padding: 6px 12px; border-radius: 6px;
@@ -415,7 +422,7 @@ main { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 10px;
   color: var(--accent); cursor: pointer;
   flex-shrink: 0;
 }
-#instrBtn:active { background: rgba(0,212,255,0.22); }
+#instrBtn:active, #sendCfgBtn:active { background: rgba(0,212,255,0.22); }
 #lockBtn {
   font-family: 'Share Tech Mono', monospace;
   font-size: 19px; font-weight: 700; letter-spacing: 2px;
@@ -659,6 +666,9 @@ footer#loggerFooter {
       <div><span style="color:var(--accent2);font-weight:700;">✓ YES</span> Mobile Data</div>
     </div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">3.</span> Lock the screen, close the box and good luck with your explorations!</div>
+    <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-top:4px;">After the dive:</div>
+    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">4.</span> SEND LOG shares the CSV + GPX + KML together, or saves all three as one <span style="color:var(--accent2);">.zip</span> in Downloads. The log is kept until you tap DEL LOG, so nothing is lost if the mail never goes out.</div>
+    <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">5.</span> Only points with a genuine fix are exported &mdash; the submerged stretches are collapsed away, which keeps the file under Google Earth&rsquo;s 1000 points/hour limit. Turn that off under EMAIL.</div>
     <button onclick="document.getElementById('instrModal').classList.add('hidden')" style="margin-top:6px;font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;padding:13px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CLOSE</button>
   </div>
 </div>
@@ -747,7 +757,8 @@ footer#loggerFooter {
 <footer id="loggerFooter">
   <div id="loggerRow1">
     <div id="loggerStatus"><span id="loggerDot" class="ldot off"></span><span id="loggerLbl">LOGGER OFF</span></div>
-    <div id="loggerCount" class="logger-count">0 fixes</div>
+    <div id="loggerCount" class="logger-count">0 pts</div>
+    <button id="sendCfgBtn" title="Auto-send settings">EMAIL</button>
     <button id="instrBtn">📖 INFO</button>
   </div>
   <div id="loggerRow2">
@@ -758,6 +769,37 @@ footer#loggerFooter {
     </div>
   </div>
 </footer>
+
+<div id="sendCfgModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);align-items:center;justify-content:center;z-index:300;padding:20px;">
+  <div style="background:var(--surface);border:1px solid rgba(0,212,255,0.4);border-radius:16px;padding:24px 20px;width:100%;max-width:400px;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;">
+    <div style="font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:3px;color:var(--accent);text-align:center;">AUTO-SEND</div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;">
+      Paste an HTTPS endpoint that receives the log and emails it on. With it set, the log is uploaded automatically when you stop logging &mdash; no share sheet, no tapping. Leave blank to use the share sheet / zip download only.
+    </div>
+    <label style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--muted);">ENDPOINT URL (https)</label>
+    <input id="cfgUrl" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://divenav-log-mail.sticasale.workers.dev/"
+      style="padding:12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text);font-family:'Share Tech Mono',monospace;font-size:14px;">
+    <label style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--muted);">SHARED SECRET (optional)</label>
+    <input id="cfgToken" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="bearer token"
+      style="padding:12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text);font-family:'Share Tech Mono',monospace;font-size:14px;">
+    <label style="font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--muted);">SEND TO</label>
+    <input id="cfgEmail" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false"
+      style="padding:12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text);font-family:'Share Tech Mono',monospace;font-size:14px;">
+    <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--text);line-height:1.5;">
+      <input id="cfgClean" type="checkbox" style="width:20px;height:20px;flex-shrink:0;margin-top:1px;">
+      <span>Clean export &mdash; drop every point recorded with no real GPS fix (keeps the file well under Google Earth's 1000 points/hour)</span>
+    </label>
+    <label style="display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--text);line-height:1.5;">
+      <input id="cfgKeep" type="checkbox" style="width:20px;height:20px;flex-shrink:0;margin-top:1px;">
+      <span>Keep the log on the device after a successful upload</span>
+    </label>
+    <div id="cfgErr" style="font-size:13px;color:var(--warn);min-height:16px;"></div>
+    <div style="display:flex;gap:10px;">
+      <button id="cfgCancel" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CANCEL</button>
+      <button id="cfgSave" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid rgba(0,212,255,0.6);background:rgba(0,212,255,0.1);color:var(--accent);cursor:pointer;">SAVE</button>
+    </div>
+  </div>
+</div>
 
 <script>
 var myPos = null;            // best CURRENT (accepted, possibly stale) position used for nav
@@ -1067,9 +1109,34 @@ function openDB(cb) {
   };
 }
 
+// Waypoint and library writes are held back until the copies on disk have
+// been reconciled. Without this, a save firing in the first moments after
+// launch - when Android has evicted localStorage and IndexedDB has not
+// answered yet - would overwrite the good IndexedDB copy with an empty one.
+// That is how the library lost all of its entries.
+var _storeReady = false;
+var _pendingWpSave = false, _pendingLibSave = false;
+function flushPendingSaves() {
+  if (_storeReady) return;
+  _storeReady = true;
+  if (_pendingWpSave)  { _pendingWpSave  = false; saveWPs(); }
+  if (_pendingLibSave) { _pendingLibSave = false; saveLibrary(); }
+}
+// Never let a failed/slow DB open block saving forever.
+setTimeout(flushPendingSaves, 6000);
+
+// Ask Android not to evict this origin's storage under disk pressure - the
+// other half of why the library could vanish between dives.
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persisted().then(function(already) {
+    if (!already) return navigator.storage.persist();
+  }).catch(function() {});
+}
+
 function saveWPs() {
   syncLibrary(); // assigns ids + upserts coord'd waypoints into library BEFORE serialising
   try { localStorage.setItem('divenav_wps', JSON.stringify(wps)); } catch(e) {}
+  if (!_storeReady) { _pendingWpSave = true; return; }
   openDB(function(db) {
     if (!db) return;
     try {
@@ -1109,7 +1176,7 @@ var wps = loadWPs();
 
 // Initialise DB once; reconcile waypoints and seed log count
 openDB(function(db) {
-  if (!db) return;
+  if (!db) { flushPendingSaves(); return; }
   // Reconcile waypoints
   try {
     var tx = db.transaction(DB_STORE, 'readonly');
@@ -1137,16 +1204,19 @@ openDB(function(db) {
     var tx3 = db.transaction(DB_STORE, 'readonly');
     var req3 = tx3.objectStore(DB_STORE).get(LIB_KEY);
     req3.onsuccess = function() {
+      var merged = false;
       if (req3.result) {
         try {
           var dbLib = JSON.parse(req3.result);
-          if (dbLib && dbLib.length) mergeLibrary(dbLib);
+          if (dbLib && dbLib.length) { mergeLibrary(dbLib); merged = true; }
         } catch(e) {}
       }
+      flushPendingSaves();               // DB copy is in - writes are safe now
+      if (merged) saveLibrary();         // rebuild the localStorage mirror
       syncLibrary(); // seed library from any existing on-screen waypoints
     };
-    req3.onerror = function() { syncLibrary(); };
-  } catch(e) { syncLibrary(); }
+    req3.onerror = function() { flushPendingSaves(); syncLibrary(); };
+  } catch(e) { flushPendingSaves(); syncLibrary(); }
 });
 var colorClasses = ['c1','c2','c3','c4'];
 
@@ -1225,7 +1295,9 @@ function render() {
     card.innerHTML =
       '<div class="wp-top">'+
         '<div class="wp-label-row">'+
-          '<div class="wp-drag" title="Drag to reorder">\u283f</div>'+
+          '<div class="wp-drag" title="Drag to reorder" aria-label="Drag to reorder">'+
+            '<span></span><span></span><span></span>'+
+          '</div>'+
           '<div class="wp-bullet"></div>'+
           '<div class="wp-title" contenteditable="true" spellcheck="false" onblur="renameWP('+i+',this)">'+wp.name+'</div>'+
         '</div>'+
@@ -1526,6 +1598,7 @@ var lib = loadLibrary();
 
 function saveLibrary() {
   try { localStorage.setItem('divenav_library', JSON.stringify(lib)); } catch(e) {}
+  if (!_storeReady) { _pendingLibSave = true; return; }
   openDB(function(db) {
     if (!db) return;
     try {
@@ -2378,7 +2451,8 @@ function onPos(p) {
   var freshByTime = fixAgeMs <= FRESH_MS;
   var genuine = freshByTime && !inReplayRun;
 
-  rawPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: acc, fixTs: fixTs };
+  rawPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: acc, fixTs: fixTs,
+            genuine: genuine, frozen: inReplayRun, ageMs: fixAgeMs };
 
   // Accuracy panel always reflects the RAW reading from iOS
   document.getElementById('dot').className = 'dot on';
@@ -2453,22 +2527,87 @@ var loggerActive = false;
 var loggerInterval = null;
 var logCount = 0;
 
-function saveLogFix() {
-  if (!rawPos) return;
-  if (!_db) return;
+// -- Logger tuning ---------------------------------------------------
+// Underwater there is no GPS at all: Android keeps replaying the last cached
+// fix, which used to write ~1800 near-identical rows an hour - the reason
+// Google Earth Pro complained about >1000 points per hour. Two rules keep the
+// file small and honest:
+//   1. a sample that hasn't really moved EXTENDS the previous row (n++, tsEnd)
+//      instead of appending a new one
+//   2. genuinely new positions are written at most once per LOG_MIN_GAP_MS
+// Rows are additionally tagged gps:true/false, so the export can drop
+// everything recorded while there was no real fix.
+var LOG_MIN_GAP_MS = 4000;   // <= 900 rows/hour even when moving continuously
+var LOG_MIN_MOVE_M = 3;      // closer than this = same spot, extend the run
+var LOG_CLEAN_ACC  = 50;     // metres - worse than this is not a usable fix
+var _logLastKey   = null;    // IDB key of the row currently being extended
+var _logLastRec   = null;
+var _logLastWrite = 0;
+var _logAdding    = false;   // an add() is in flight, its key isn't known yet
+var _logDirty     = false;   // the in-flight row changed while it was writing
+
+// Append a new row. The generated key only arrives on onsuccess, so any
+// extension that happens in the meantime is flushed once we have it -
+// otherwise every extension would fall back to add() and the run would
+// never collapse.
+function _logAdd(rec) {
   try {
-    var fix = {
-      ts: new Date().toISOString(),
-      lat: rawPos.lat,
-      lon: rawPos.lon,
-      acc: rawPos.acc
-    };
-    var tx = _db.transaction(LOG_STORE, 'readwrite');
-    tx.objectStore(LOG_STORE).add(fix);
-    tx.oncomplete = function() {
+    var tx  = _db.transaction(LOG_STORE, 'readwrite');
+    var req = tx.objectStore(LOG_STORE).add(rec);
+    _logAdding = true; _logDirty = false;
+    req.onsuccess = function() {
+      _logLastKey = req.result;
+      _logAdding  = false;
+      if (_logDirty) { _logDirty = false; _logUpdate(); }
       countLogFixes(function(n) { updateLogUI(n); });
     };
+    req.onerror = function() { _logAdding = false; };
+  } catch(e) { _logAdding = false; }
+}
+
+// Rewrite the row currently being extended, in place.
+function _logUpdate() {
+  if (_logAdding || _logLastKey === null || _logLastKey === undefined) {
+    _logDirty = true;   // key not known yet - flush when the add lands
+    return;
+  }
+  try {
+    var tx = _db.transaction(LOG_STORE, 'readwrite');
+    tx.objectStore(LOG_STORE).put(_logLastRec, _logLastKey);
   } catch(e) {}
+}
+
+function saveLogFix() {
+  if (!rawPos || !_db) return;
+  var now = Date.now();
+  // A row counts as a real fix only if it was computed recently, isn't a
+  // replay of a cached position, and is accurate enough to be worth plotting.
+  var gps = !!rawPos.genuine && rawPos.acc <= LOG_CLEAN_ACC;
+
+  // How far the reading has to move before it counts as a new place. With a
+  // real fix that is a few metres; with no fix the reported accuracy IS the
+  // uncertainty, so anything inside that radius is the same cached position
+  // jittering - one row for the whole submersion instead of hundreds.
+  var tol = gps ? LOG_MIN_MOVE_M
+                : Math.max(LOG_MIN_MOVE_M, Math.min(rawPos.acc, 500));
+
+  // Same spot + same quality class -> just extend the run in place.
+  if (_logLastRec && _logLastRec.gps === gps &&
+      haversine(_logLastRec.lat, _logLastRec.lon, rawPos.lat, rawPos.lon) < tol) {
+    _logLastRec.tsEnd = new Date(now).toISOString();
+    _logLastRec.n++;
+    if (rawPos.acc < _logLastRec.acc) _logLastRec.acc = rawPos.acc;
+    _logUpdate();
+    return;
+  }
+
+  if (now - _logLastWrite < LOG_MIN_GAP_MS) return; // rate cap on NEW rows
+  _logLastWrite = now;
+  var iso = new Date(now).toISOString();
+  _logLastRec = { ts: iso, tsEnd: iso, lat: rawPos.lat, lon: rawPos.lon,
+                  acc: rawPos.acc, n: 1, gps: gps };
+  _logLastKey = null;
+  _logAdd(_logLastRec);
 }
 
 function countLogFixes(cb) {
@@ -2499,19 +2638,24 @@ function clearLogFixes(cb) {
   try {
     var tx = _db.transaction(LOG_STORE, 'readwrite');
     tx.objectStore(LOG_STORE).clear();
-    tx.oncomplete = function() { if(cb) cb(); };
+    tx.oncomplete = function() {
+      _logLastRec = null; _logLastKey = null; _logLastWrite = 0; _logAdding = false; _logDirty = false;
+      if(cb) cb();
+    };
   } catch(e) { if(cb) cb(); }
 }
 
 function updateLogUI(n) {
   logCount = n;
-  document.getElementById('loggerCount').textContent = n + ' fix' + (n === 1 ? '' : 'es');
+  document.getElementById('loggerCount').textContent = n + ' pt' + (n === 1 ? '' : 's');
   document.getElementById('loggerSendBtn').disabled = (n === 0);
   document.getElementById('loggerDelBtn').disabled  = (n === 0);
 }
 
 function startLogger() {
   loggerActive = true;
+  // Never extend a row from a previous session - start a fresh one.
+  _logLastRec = null; _logLastKey = null; _logLastWrite = 0; _logAdding = false; _logDirty = false;
   var btn = document.getElementById('loggerToggleBtn');
   btn.textContent = 'STOP LOG';
   btn.className = 'footer-btn btn-logger-stop';
@@ -2526,6 +2670,7 @@ function stopLogger() {
   loggerActive = false;
   clearInterval(loggerInterval);
   loggerInterval = null;
+  _logLastRec = null; _logLastKey = null; _logDirty = false;
   var btn = document.getElementById('loggerToggleBtn');
   btn.textContent = 'START LOG';
   btn.className = 'footer-btn btn-logger-start';
@@ -2533,6 +2678,7 @@ function stopLogger() {
   document.getElementById('loggerLbl').textContent = 'LOGGER OFF';
   log('Data logger stopped', 'linf');
   countLogFixes(function(n) { updateLogUI(n); });
+  autoSend('logger stopped');   // silent upload if an endpoint is configured
 }
 
 document.getElementById('loggerToggleBtn').addEventListener('click', function() {
@@ -2543,145 +2689,338 @@ document.getElementById('loggerDelBtn').addEventListener('click', function() {
   document.getElementById('delLogModal').style.display='flex';
 });
 
-document.getElementById('loggerSendBtn').addEventListener('click', function() {
+// ====================================================================
+//  EXPORT
+//  Rows are normalised, optionally cleaned (drop everything logged while
+//  there was no real GPS fix) and thinned to stay under Google Earth Pro's
+//  1000-points-per-hour limit, then rendered as CSV / GPX / KML.
+// ====================================================================
+
+function normLogRows(fixes) {
+  return fixes.map(function(f) {
+    var acc = (typeof f.acc === 'number') ? f.acc : 999;
+    return {
+      ts: f.ts, tsEnd: f.tsEnd || f.ts,
+      lat: f.lat, lon: f.lon, acc: acc, n: f.n || 1,
+      // rows written by older builds carry no quality flag - infer it
+      gps: (typeof f.gps === 'boolean') ? f.gps : (acc <= LOG_CLEAN_ACC)
+    };
+  }).filter(function(r) {
+    return typeof r.lat === 'number' && typeof r.lon === 'number';
+  });
+}
+
+// Drop everything recorded while the phone had no usable fix (i.e. the whole
+// underwater stretch, where Android just replays one cached position).
+function cleanLogRows(rows) {
+  return rows.filter(function(r) { return r.gps; });
+}
+
+// Belt-and-braces density cap, for logs recorded by older builds.
+function thinLogRows(rows) {
+  var out = [], lastT = 0;
+  rows.forEach(function(r) {
+    var t = new Date(r.ts).getTime();
+    if (!out.length || t - lastT >= LOG_MIN_GAP_MS) { out.push(r); lastT = t; }
+  });
+  return out;
+}
+
+function _p2(n) { return (n < 10 ? '0' : '') + n; }
+function kmlLocalDate(iso) {
+  var d = new Date(iso);
+  return d.getFullYear() + '-' + _p2(d.getMonth()+1) + '-' + _p2(d.getDate());
+}
+function kmlLocalTime(iso) {
+  var d = new Date(iso);
+  return _p2(d.getHours()) + ':' + _p2(d.getMinutes()) + ':' + _p2(d.getSeconds());
+}
+function kmlDur(ms) {
+  var s = Math.round(ms/1000), m = Math.floor(s/60);
+  return (m ? m + 'm ' : '') + (s % 60) + 's';
+}
+
+function buildLogFiles(rows) {
+  // -- CSV --
+  var csv = 'timestamp,latitude,longitude,accuracy_m,samples,duration_s,fix\n';
+  rows.forEach(function(r) {
+    csv += r.ts + ',' + r.lat + ',' + r.lon + ',' + Math.round(r.acc) + ',' + r.n + ','
+         + Math.round((new Date(r.tsEnd) - new Date(r.ts)) / 1000) + ','
+         + (r.gps ? 'gps' : 'nofix') + '\n';
+  });
+
+  // -- GPX --
+  var gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  gpx += '<gpx version="1.1" creator="DiveNav" xmlns="http://www.topografix.com/GPX/1/1" xmlns:divenav="http://divenav/ext/1">\n';
+  gpx += '  <trk><name>DiveNav Log ' + kmlLocalDate(rows[0].ts) + '</name><trkseg>\n';
+  rows.forEach(function(r) {
+    gpx += '    <trkpt lat="' + r.lat + '" lon="' + r.lon + '">\n';
+    gpx += '      <time>' + r.ts + '</time>\n';
+    gpx += '      <desc>GPS accuracy: \xb1' + Math.round(r.acc) + 'm</desc>\n';
+    gpx += '      <hdop>' + (r.acc/5).toFixed(1) + '</hdop>\n';
+    gpx += '      <extensions><divenav:accuracy>' + Math.round(r.acc) + '</divenav:accuracy></extensions>\n';
+    gpx += '    </trkpt>\n';
+  });
+  gpx += '  </trkseg></trk>\n</gpx>';
+
+  // -- KML - accuracy colour-coding, track line, local times --
+  function kmlAccStyle(acc) { return acc <= 15 ? '#dotGood' : (acc <= 100 ? '#dotMid' : '#dotBad'); }
+  var KML_ICON = '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>';
+  var kml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n';
+  kml += '  <name>DiveNav Log ' + kmlLocalDate(rows[0].ts) + '</name>\n';
+  // KML colours are aabbggrr: green / orange / red dots, cyan track
+  kml += '  <Style id="dotGood"><IconStyle><color>ff00ff00</color><scale>0.7</scale>' + KML_ICON + '</IconStyle></Style>\n';
+  kml += '  <Style id="dotMid"><IconStyle><color>ff00a5ff</color><scale>0.8</scale>' + KML_ICON + '</IconStyle></Style>\n';
+  kml += '  <Style id="dotBad"><IconStyle><color>ff0000ff</color><scale>1.0</scale>' + KML_ICON + '</IconStyle></Style>\n';
+  kml += '  <Style id="trackLine"><LineStyle><color>ffffd400</color><width>2</width></LineStyle></Style>\n';
+  kml += '  <Placemark>\n    <name>Track</name>\n    <styleUrl>#trackLine</styleUrl>\n';
+  kml += '    <LineString><tessellate>1</tessellate><coordinates>\n';
+  rows.forEach(function(r) { kml += '      ' + r.lon + ',' + r.lat + ',0\n'; });
+  kml += '    </coordinates></LineString>\n  </Placemark>\n';
+  rows.forEach(function(r) {
+    var acc = Math.round(r.acc);
+    var held = r.n > 1;
+    kml += '  <Placemark>\n';
+    kml += '    <styleUrl>' + kmlAccStyle(acc) + '</styleUrl>\n';
+    kml += '    <name>\xb1' + acc + 'm' + (held ? ' \xb7 ' + r.n + ' fixes' : '') + '</name>\n';
+    kml += '    <description><![CDATA[';
+    kml += '<b>GPS Accuracy:</b> \xb1' + acc + 'm<br/>';
+    kml += '<b>Date:</b> ' + kmlLocalDate(r.ts) + '<br/>';
+    kml += '<b>Time (local):</b> ' + kmlLocalTime(r.ts) + (held ? ' → ' + kmlLocalTime(r.tsEnd) : '') + '<br/>';
+    if (held) kml += '<b>Held for:</b> ' + kmlDur(new Date(r.tsEnd) - new Date(r.ts)) + ' (' + r.n + ' samples — stationary or no fix)<br/>';
+    if (!r.gps) kml += '<b>No live GPS fix</b> — cached position<br/>';
+    kml += '<b>Lat:</b> ' + r.lat.toFixed(6) + '<br/>';
+    kml += '<b>Lon:</b> ' + r.lon.toFixed(6);
+    kml += ']]></description>\n';
+    kml += '    <Point><coordinates>' + r.lon + ',' + r.lat + ',0</coordinates></Point>\n';
+    kml += '  </Placemark>\n';
+  });
+  kml += '</Document>\n</kml>';
+
+  // Recording-start timestamp = the first logged row (survives reloads).
+  var d = new Date(rows[0].ts);
+  var yy = _p2(d.getFullYear() % 100), MM = _p2(d.getMonth() + 1),
+      dd = _p2(d.getDate()), hh = _p2(d.getHours()), mi = _p2(d.getMinutes());
+  var dateStr = '20' + yy + '-' + MM + '-' + dd + '_' + hh + '-' + mi;
+  return {
+    csv: csv, gpx: gpx, kml: kml,
+    dateStr: dateStr,
+    stem: 'divenav_' + dateStr,
+    subject: 'DiveNav Log ' + yy + '-' + MM + '-' + dd + ' ' + hh + '-' + mi,
+    count: rows.length
+  };
+}
+
+// Assemble the rows we actually want to export.
+function exportRows(fixes) {
+  var rows = normLogRows(fixes);
+  if (!rows.length) return rows;
+  if (logCleanMode()) {
+    var clean = cleanLogRows(rows);
+    // If a whole dive happened to produce no usable fix, exporting nothing
+    // would be worse than exporting the raw trail - fall back with a warning.
+    if (clean.length) rows = clean;
+    else log('No GPS-quality points in this log - exporting raw trail', 'lerr');
+  }
+  return thinLogRows(rows);
+}
+
+// -- ZIP (store, no compression) -------------------------------------
+// Android Chrome reliably allows ONE download per tap; three separate
+// downloads meant only the first (the CSV) ever landed. One zip = one file.
+var _crcTable = null;
+function crc32(buf) {
+  if (!_crcTable) {
+    _crcTable = new Int32Array(256);
+    for (var i = 0; i < 256; i++) {
+      var c = i;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      _crcTable[i] = c;
+    }
+  }
+  var crc = -1;
+  for (var j = 0; j < buf.length; j++) crc = (crc >>> 8) ^ _crcTable[(crc ^ buf[j]) & 0xFF];
+  return (crc ^ -1) >>> 0;
+}
+function zipStore(files) { // [{name, text}] -> Blob
+  var enc = new TextEncoder();
+  var parts = [], central = [], offset = 0;
+  function u16(n) { return [n & 255, (n >>> 8) & 255]; }
+  function u32(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+  files.forEach(function(f) {
+    var name = enc.encode(f.name), data = enc.encode(f.text), crc = crc32(data);
+    var hdr = [].concat([0x50,0x4b,0x03,0x04], u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+                        u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0));
+    parts.push(new Uint8Array(hdr), name, data);
+    central.push({ name: name, crc: crc, size: data.length, offset: offset });
+    offset += hdr.length + name.length + data.length;
+  });
+  var cdir = [], cdirLen = 0;
+  central.forEach(function(c) {
+    var h = [].concat([0x50,0x4b,0x01,0x02], u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+                      u32(c.crc), u32(c.size), u32(c.size), u16(c.name.length),
+                      u16(0), u16(0), u16(0), u16(0), u32(0), u32(c.offset));
+    cdir.push(new Uint8Array(h), c.name);
+    cdirLen += h.length + c.name.length;
+  });
+  var end = new Uint8Array([].concat([0x50,0x4b,0x05,0x06], u16(0), u16(0),
+                                     u16(files.length), u16(files.length),
+                                     u32(cdirLen), u32(offset), u16(0)));
+  return new Blob(parts.concat(cdir, [end]), { type: 'application/zip' });
+}
+
+function downloadBlob(blob, filename) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 10000);
+}
+
+// ====================================================================
+//  AUTO-SEND
+//  mailto: cannot carry attachments and the share sheet needs a tap, so a
+//  hands-free email needs one HTTPS endpoint that receives the three files
+//  and mails them on. Configure it under the gear button (URL + token).
+//  Nothing is deleted locally until the endpoint confirms receipt.
+// ====================================================================
+var SEND_CFG_KEY = 'divenav_sendcfg';
+function sendCfg() {
+  try { return JSON.parse(localStorage.getItem(SEND_CFG_KEY) || 'null') || {}; }
+  catch(e) { return {}; }
+}
+function saveSendCfg(cfg) {
+  try { localStorage.setItem(SEND_CFG_KEY, JSON.stringify(cfg)); } catch(e) {}
+}
+function logCleanMode() {
+  return sendCfg().clean !== false; // default ON
+}
+
+var _uploading = false;
+function uploadLog(files, cb) {
+  var cfg = sendCfg();
+  if (!cfg.url || _uploading) { cb(false, 'not configured'); return; }
+  if (cfg.url.indexOf('https://') !== 0) { cb(false, 'endpoint must be https'); return; }
+  _uploading = true;
+  var fd = new FormData();
+  fd.append('subject', files.subject);
+  fd.append('to', cfg.email || 'sticasale@gmail.com');
+  fd.append('points', String(files.count));
+  fd.append('csv', new Blob([files.csv], { type: 'text/csv' }), files.stem + '.csv');
+  fd.append('gpx', new Blob([files.gpx], { type: 'application/gpx+xml' }), files.stem + '.gpx');
+  fd.append('kml', new Blob([files.kml], { type: 'application/vnd.google-earth.kml+xml' }), files.stem + '.kml');
+  var headers = {};
+  if (cfg.token) headers['Authorization'] = 'Bearer ' + cfg.token;
+  fetch(cfg.url, { method: 'POST', body: fd, headers: headers, mode: 'cors' })
+    .then(function(res) {
+      _uploading = false;
+      if (res.ok) cb(true, '');
+      else cb(false, 'HTTP ' + res.status);
+    })
+    .catch(function(err) { _uploading = false; cb(false, err.message || 'network error'); });
+}
+
+// Silent upload attempt - used when the logger stops, on reconnect and at
+// startup. Only clears the local log once the endpoint has confirmed.
+function autoSend(reason) {
+  if (!sendCfg().url) return;
   getAllLogFixes(function(fixes) {
-    if (!fixes.length) return;
-
-    // ── Build CSV ──
-    var csv = 'timestamp,latitude,longitude,accuracy_m\n';
-    fixes.forEach(function(f) {
-      csv += f.ts + ',' + f.lat + ',' + f.lon + ',' + f.acc + '\n';
-    });
-
-    // ── Build GPX ──
-    var gpx = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    gpx += '<gpx version="1.1" creator="DiveNav" xmlns="http://www.topografix.com/GPX/1/1" xmlns:divenav="http://divenav/ext/1">\n';
-    gpx += '  <trk><name>DiveNav Log ' + new Date().toISOString().slice(0,10) + '</name><trkseg>\n';
-    fixes.forEach(function(f) {
-      gpx += '    <trkpt lat="' + f.lat + '" lon="' + f.lon + '">\n';
-      gpx += '      <time>' + f.ts + '</time>\n';
-      gpx += '      <desc>GPS accuracy: \xb1' + Math.round(f.acc) + 'm</desc>\n';
-      gpx += '      <hdop>' + (f.acc/5).toFixed(1) + '</hdop>\n';
-      gpx += '      <extensions><divenav:accuracy>' + Math.round(f.acc) + '</divenav:accuracy></extensions>\n';
-      gpx += '    </trkpt>\n';
-    });
-    gpx += '  </trkseg></trk>\n</gpx>';
-
-    // ── Build KML — deduped runs, accuracy colour-coding, track line, local times ──
-    function kmlPad(n) { return (n < 10 ? '0' : '') + n; }
-    function kmlLocalDate(iso) {
-      var d = new Date(iso);
-      return d.getFullYear() + '-' + kmlPad(d.getMonth()+1) + '-' + kmlPad(d.getDate());
-    }
-    function kmlLocalTime(iso) {
-      var d = new Date(iso);
-      return kmlPad(d.getHours()) + ':' + kmlPad(d.getMinutes()) + ':' + kmlPad(d.getSeconds());
-    }
-    function kmlDur(ms) {
-      var s = Math.round(ms/1000), m = Math.floor(s/60);
-      return (m ? m + 'm ' : '') + (s % 60) + 's';
-    }
-    // Collapse consecutive identical fixes (same coords + accuracy) into runs
-    var kmlRuns = [];
-    fixes.forEach(function(f) {
-      var last = kmlRuns[kmlRuns.length-1];
-      if (last && last.lat === f.lat && last.lon === f.lon &&
-          Math.round(last.acc) === Math.round(f.acc)) {
-        last.n++; last.tsEnd = f.ts;
+    var rows = exportRows(fixes);
+    if (!rows.length) return;
+    var files = buildLogFiles(rows);
+    log('Auto-send (' + reason + '): uploading ' + rows.length + ' points...', 'linf');
+    uploadLog(files, function(ok, err) {
+      if (ok) {
+        if (sendCfg().keep) { log('Log emailed (' + rows.length + ' points) - kept on device', 'lok'); return; }
+        clearLogFixes(function() { updateLogUI(0); log('Log emailed (' + rows.length + ' points) and cleared', 'lok'); });
       } else {
-        kmlRuns.push({ lat: f.lat, lon: f.lon, acc: f.acc, ts: f.ts, tsEnd: f.ts, n: 1 });
+        log('Auto-send failed (' + err + ') - log kept, will retry', 'lerr');
       }
     });
-    function kmlAccStyle(acc) { return acc <= 15 ? '#dotGood' : (acc <= 100 ? '#dotMid' : '#dotBad'); }
+  });
+}
+window.addEventListener('online', function() { autoSend('back online'); });
 
-    var KML_ICON = '<Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>';
-    var kml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n';
-    kml += '  <name>DiveNav Log ' + kmlLocalDate(fixes[0].ts) + '</name>\n';
-    // KML colours are aabbggrr: green / orange / red dots, cyan track
-    kml += '  <Style id="dotGood"><IconStyle><color>ff00ff00</color><scale>0.7</scale>' + KML_ICON + '</IconStyle></Style>\n';
-    kml += '  <Style id="dotMid"><IconStyle><color>ff00a5ff</color><scale>0.8</scale>' + KML_ICON + '</IconStyle></Style>\n';
-    kml += '  <Style id="dotBad"><IconStyle><color>ff0000ff</color><scale>1.0</scale>' + KML_ICON + '</IconStyle></Style>\n';
-    kml += '  <Style id="trackLine"><LineStyle><color>ffffd400</color><width>2</width></LineStyle></Style>\n';
+document.getElementById('loggerSendBtn').addEventListener('click', function() {
+  getAllLogFixes(function(fixes) {
+    var rows = exportRows(fixes);
+    if (!rows.length) { log('Nothing to send', 'lerr'); return; }
+    var files = buildLogFiles(rows);
+    log('Preparing ' + rows.length + ' points (' + (logCleanMode() ? 'GPS-only' : 'raw') + ')', 'linf');
 
-    // Track line through the deduped points, in time order
-    kml += '  <Placemark>\n    <name>Track</name>\n    <styleUrl>#trackLine</styleUrl>\n';
-    kml += '    <LineString><tessellate>1</tessellate><coordinates>\n';
-    kmlRuns.forEach(function(r) { kml += '      ' + r.lon + ',' + r.lat + ',0\n'; });
-    kml += '    </coordinates></LineString>\n  </Placemark>\n';
+    // 1. Configured endpoint - the only fully automatic route.
+    if (sendCfg().url) autoSend('send button');
 
-    kmlRuns.forEach(function(r) {
-      var acc = Math.round(r.acc);
-      var held = r.n > 1;
-      kml += '  <Placemark>\n';
-      kml += '    <styleUrl>' + kmlAccStyle(acc) + '</styleUrl>\n';
-      kml += '    <name>\xb1' + acc + 'm' + (held ? ' \xb7 ' + r.n + ' fixes' : '') + '</name>\n';
-      kml += '    <description><![CDATA[';
-      kml += '<b>GPS Accuracy:</b> \xb1' + acc + 'm<br/>';
-      kml += '<b>Date:</b> ' + kmlLocalDate(r.ts) + '<br/>';
-      kml += '<b>Time (local):</b> ' + kmlLocalTime(r.ts) + (held ? ' \u2192 ' + kmlLocalTime(r.tsEnd) : '') + '<br/>';
-      if (held) kml += '<b>Held for:</b> ' + kmlDur(new Date(r.tsEnd) - new Date(r.ts)) + ' (' + r.n + ' fixes \u2014 frozen or stationary)<br/>';
-      kml += '<b>Lat:</b> ' + r.lat.toFixed(6) + '<br/>';
-      kml += '<b>Lon:</b> ' + r.lon.toFixed(6);
-      kml += ']]></description>\n';
-      kml += '    <Point><coordinates>' + r.lon + ',' + r.lat + ',0</coordinates></Point>\n';
-      kml += '  </Placemark>\n';
-    });
-    kml += '</Document>\n</kml>';
-
-    // Recording-start timestamp = the first logged fix (survives reloads).
-    var startDate = fixes.length ? new Date(fixes[0].ts) : new Date();
-    function _p(n) { return (n < 10 ? '0' : '') + n; }
-    var yy = _p(startDate.getFullYear() % 100), MM = _p(startDate.getMonth() + 1),
-        dd = _p(startDate.getDate()), hh = _p(startDate.getHours()), mi = _p(startDate.getMinutes());
-    var subject = 'DiveNav Log ' + yy + '-' + MM + '-' + dd + ' ' + hh + '-' + mi; // "DiveNav Log 26-06-14 09-32"
-    var dateStr = '20' + yy + '-' + MM + '-' + dd + '_' + hh + '-' + mi;            // filename stem
-    var TO_EMAIL = 'sticasale@gmail.com';
-
-    var csvFile = new File([csv], 'divenav_' + dateStr + '.csv', { type: 'text/csv' });
-    var gpxFile = new File([gpx], 'divenav_' + dateStr + '.gpx', { type: 'application/gpx+xml' });
-    var kmlFile = new File([kml], 'divenav_' + dateStr + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
-    var shareData = { files: [csvFile, gpxFile, kmlFile], title: subject, text: subject };
-
-    // ── Share with files — the only path that auto-attaches all three on
-    // BOTH iOS and Android. mailto cannot carry attachments, so the share
-    // sheet (pick Gmail / Mail) is the automatic route. ──
+    // 2. Share sheet: the only path that attaches all three files to a mail
+    //    on Android/iOS. Needs this tap, so it must run synchronously here.
+    var csvFile = new File([files.csv], files.stem + '.csv', { type: 'text/csv' });
+    var gpxFile = new File([files.gpx], files.stem + '.gpx', { type: 'application/gpx+xml' });
+    var kmlFile = new File([files.kml], files.stem + '.kml', { type: 'application/vnd.google-earth.kml+xml' });
+    var shareData = { files: [csvFile, gpxFile, kmlFile], title: files.subject, text: files.subject };
     if (navigator.canShare && navigator.canShare(shareData)) {
       navigator.share(shareData).then(function() {
-        clearLogFixes(function() { updateLogUI(0); log('Log shared (CSV+GPX+KML) and cleared', 'lok'); });
+        // Sharing gives no delivery confirmation, so the log is KEPT.
+        // Use DEL LOG once the mail has actually gone out.
+        log('Shared CSV+GPX+KML - log kept until you tap DEL LOG', 'lok');
       }).catch(function(err) {
-        if (err.name !== 'AbortError') fallbackSend(csv, gpx, kml, dateStr, subject, TO_EMAIL);
+        if (err.name !== 'AbortError') downloadZip(files);
       });
       return;
     }
-    fallbackSend(csv, gpx, kml, dateStr, subject, TO_EMAIL);
+
+    // 3. No share support: one zip, one download, same tap.
+    downloadZip(files);
   });
 });
 
-function fallbackSend(csv, gpx, kml, dateStr, subject, email) {
-  // No file-share support: download all three reliably (Blob URLs are far
-  // more dependable than data: URLs on Android), then open Mail.
-  function dl(content, mime, ext) {
-    var blob = new Blob([content], { type: mime });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url; a.download = 'divenav_' + dateStr + '.' + ext;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
-  }
-  dl(csv, 'text/csv', 'csv');
-  setTimeout(function() { dl(gpx, 'application/gpx+xml', 'gpx'); }, 700);
-  setTimeout(function() { dl(kml, 'application/vnd.google-earth.kml+xml', 'kml'); }, 1400);
-  setTimeout(function() {
-    var body = 'GPS log: divenav_' + dateStr + '.csv, .gpx and .kml.\n'
-             + '(If not already attached, add the 3 files just downloaded.) '
-             + 'Open the .kml in Google Maps to see accuracy per point.';
-    var a = document.createElement('a');
-    a.href = 'mailto:' + email + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    clearLogFixes(function() { updateLogUI(0); log('Log downloaded — Mail opened to ' + email, 'lok'); });
-  }, 2100);
+function downloadZip(files) {
+  var blob = zipStore([
+    { name: files.stem + '.csv', text: files.csv },
+    { name: files.stem + '.gpx', text: files.gpx },
+    { name: files.stem + '.kml', text: files.kml }
+  ]);
+  downloadBlob(blob, files.stem + '.zip');
+  log('Saved ' + files.stem + '.zip (CSV+GPX+KML) to Downloads - log kept', 'lok');
 }
+
+// -- Send settings modal --
+function openSendCfg() {
+  var cfg = sendCfg();
+  // Prefilled with the deployed divenav-log-mail Worker; nothing is used
+  // until SAVE is tapped, so an unconfigured app stays fully offline.
+  document.getElementById('cfgUrl').value   = cfg.url || 'https://divenav-log-mail.sticasale.workers.dev/';
+  document.getElementById('cfgToken').value = cfg.token || '';
+  document.getElementById('cfgEmail').value = cfg.email || 'sticasale@gmail.com';
+  document.getElementById('cfgClean').checked = (cfg.clean !== false);
+  document.getElementById('cfgKeep').checked  = !!cfg.keep;
+  document.getElementById('cfgErr').textContent = '';
+  document.getElementById('sendCfgModal').style.display = 'flex';
+}
+document.getElementById('sendCfgBtn').addEventListener('click', openSendCfg);
+document.getElementById('cfgCancel').addEventListener('click', function() {
+  document.getElementById('sendCfgModal').style.display = 'none';
+});
+document.getElementById('cfgSave').addEventListener('click', function() {
+  var url = document.getElementById('cfgUrl').value.trim();
+  if (url && url.indexOf('https://') !== 0) {
+    document.getElementById('cfgErr').textContent = 'Endpoint must start with https://';
+    return;
+  }
+  saveSendCfg({
+    url: url,
+    token: document.getElementById('cfgToken').value.trim(),
+    email: document.getElementById('cfgEmail').value.trim(),
+    clean: document.getElementById('cfgClean').checked,
+    keep:  document.getElementById('cfgKeep').checked
+  });
+  document.getElementById('sendCfgModal').style.display = 'none';
+  log('Send settings saved', 'lok');
+});
+
+// Anything left over from a previous dive (upload failed, app closed) goes
+// out as soon as the app is opened again.
+setTimeout(function() { autoSend('startup'); }, 4000);
 
 </script>
 <div id="delLogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);align-items:center;justify-content:center;z-index:300;padding:20px;">
