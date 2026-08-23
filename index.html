@@ -2508,7 +2508,8 @@ function renderSurfacingMap(fixes, cb) {
   _nameW('TOTAL BETWEEN SURFACINGS'); _coordW(totalStr);
 
   var stampH = kmlLocalDate(fixes[0].start) + '  ' + kmlLocalTime(fixes[0].start);
-  var subStr = stampH + '   ·   ' + fixes.length + ' surfacing'
+  var subStr = stampH + ' ' + tzAbbr(fixes[0].start)
+             + '   ·   ' + fixes.length + ' surfacing'
              + (fixes.length === 1 ? '' : 's') + '   ·   ' + durMin + ' min'
              + '   ·   ' + totalStr + ' between';
   ctx.font = '23px ' + MONO; var subW = ctx.measureText(subStr).width;
@@ -2688,7 +2689,8 @@ function renderSurfacingMap(fixes, cb) {
     ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(PAD, listTop - 22); ctx.lineTo(canvasW - PAD, listTop - 22); ctx.stroke();
     ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
-    ctx.fillText('SURFACINGS (last fix before submerging)', PAD, listTop);
+    ctx.fillText('SURFACINGS (last fix before submerging) · times '
+                 + tzAbbr(fixes[0].start), PAD, listTop);
     fixes.forEach(function (p, k) {
       var ry = listTop + 28 + k * ROW_H;
       ctx.fillStyle = '#00ff9d'; ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
@@ -2720,9 +2722,9 @@ function saveSurfacingMap(cb) {
     }
     log('Building surfacing map (' + fixes.length + ' position'
         + (fixes.length === 1 ? '' : 's') + ')…', 'linf');
-    var d = new Date(fixes[0].start);
+    var t = tzParts(fixes[0].start);
     var name = 'divenav_map_' + kmlLocalDate(fixes[0].start) + '_'
-             + _p2(d.getHours()) + '-' + _p2(d.getMinutes()) + '.png';
+             + t.hour + '-' + t.minute + '.png';
     try {
       renderSurfacingMap(fixes, function (cv, loaded) {
         try {
@@ -3003,6 +3005,7 @@ function updateLogUI(n) {
 
 function startLogger() {
   loggerActive = true;
+  markSent('');   // a new recording is new content, not a resend
   // Never extend a row from a previous session - start a fresh one.
   _logLastRec = null; _logLastKey = null; _logLastWrite = 0; _logAdding = false; _logDirty = false;
   var btn = document.getElementById('loggerToggleBtn');
@@ -3078,13 +3081,45 @@ function thinLogRows(rows) {
 }
 
 function _p2(n) { return (n < 10 ? '0' : '') + n; }
+
+// ── Time zone ───────────────────────────────────────────────────────
+// Every human-readable time is Sydney, not the device's zone and not UTC.
+// Machine fields (the CSV `timestamp` column, GPX <time>) stay ISO-8601 UTC,
+// because that is what Google Earth and every GPX reader expect. Mixing the
+// two silently is what made the mail read 04:52Z under a subject of 14-52.
+var APP_TZ = 'Australia/Sydney';
+function tzParts(iso) {
+  var d = new Date(iso), o = {};
+  try {
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: APP_TZ, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).formatToParts(d).forEach(function (part) { o[part.type] = part.value; });
+  } catch (e) {
+    // No Intl / unknown zone — fall back to the device clock rather than fail.
+    o = { year: String(d.getFullYear()), month: _p2(d.getMonth()+1), day: _p2(d.getDate()),
+          hour: _p2(d.getHours()), minute: _p2(d.getMinutes()), second: _p2(d.getSeconds()) };
+  }
+  return o;
+}
+// AEST or AEDT, whichever applied on that date.
+function tzAbbr(iso) {
+  try {
+    var parts = new Intl.DateTimeFormat('en-AU', { timeZone: APP_TZ, timeZoneName: 'short' })
+      .formatToParts(new Date(iso));
+    for (var i = 0; i < parts.length; i++)
+      if (parts[i].type === 'timeZoneName') return parts[i].value;
+  } catch (e) {}
+  return 'local';
+}
 function kmlLocalDate(iso) {
-  var d = new Date(iso);
-  return d.getFullYear() + '-' + _p2(d.getMonth()+1) + '-' + _p2(d.getDate());
+  var t = tzParts(iso);
+  return t.year + '-' + t.month + '-' + t.day;
 }
 function kmlLocalTime(iso) {
-  var d = new Date(iso);
-  return _p2(d.getHours()) + ':' + _p2(d.getMinutes()) + ':' + _p2(d.getSeconds());
+  var t = tzParts(iso);
+  return t.hour + ':' + t.minute + ':' + t.second;
 }
 function kmlDur(ms) {
   var s = Math.round(ms/1000), m = Math.floor(s/60);
@@ -3093,9 +3128,10 @@ function kmlDur(ms) {
 
 function buildLogFiles(rows) {
   // -- CSV --
-  var csv = 'timestamp,latitude,longitude,accuracy_m,samples,duration_s,fix\n';
+  var csv = 'timestamp,time_sydney,latitude,longitude,accuracy_m,samples,duration_s,fix\n';
   rows.forEach(function(r) {
-    csv += r.ts + ',' + r.lat + ',' + r.lon + ',' + Math.round(r.acc) + ',' + r.n + ','
+    csv += r.ts + ',' + kmlLocalDate(r.ts) + ' ' + kmlLocalTime(r.ts) + ','
+         + r.lat + ',' + r.lon + ',' + Math.round(r.acc) + ',' + r.n + ','
          + Math.round((new Date(r.tsEnd) - new Date(r.ts)) / 1000) + ','
          + (r.gps ? 'gps' : 'nofix') + '\n';
   });
@@ -3138,7 +3174,7 @@ function buildLogFiles(rows) {
     kml += '    <description><![CDATA[';
     kml += '<b>GPS Accuracy:</b> \xb1' + acc + 'm<br/>';
     kml += '<b>Date:</b> ' + kmlLocalDate(r.ts) + '<br/>';
-    kml += '<b>Time (local):</b> ' + kmlLocalTime(r.ts) + (held ? ' → ' + kmlLocalTime(r.tsEnd) : '') + '<br/>';
+    kml += '<b>Time (Sydney):</b> ' + kmlLocalTime(r.ts) + (held ? ' → ' + kmlLocalTime(r.tsEnd) : '') + '<br/>';
     if (held) kml += '<b>Held for:</b> ' + kmlDur(new Date(r.tsEnd) - new Date(r.ts)) + ' (' + r.n + ' samples — stationary or no fix)<br/>';
     if (!r.gps) kml += '<b>No live GPS fix</b> — cached position<br/>';
     kml += '<b>Lat:</b> ' + r.lat.toFixed(6) + '<br/>';
@@ -3150,10 +3186,9 @@ function buildLogFiles(rows) {
   kml += '</Document>\n</kml>';
 
   // Recording-start timestamp = the first logged row (survives reloads).
-  var d = new Date(rows[0].ts);
-  var yy = _p2(d.getFullYear() % 100), MM = _p2(d.getMonth() + 1),
-      dd = _p2(d.getDate()), hh = _p2(d.getHours()), mi = _p2(d.getMinutes());
-  var dateStr = '20' + yy + '-' + MM + '-' + dd + '_' + hh + '-' + mi;
+  var t = tzParts(rows[0].ts);
+  var yy = t.year.slice(2), MM = t.month, dd = t.day, hh = t.hour, mi = t.minute;
+  var dateStr = t.year + '-' + MM + '-' + dd + '_' + hh + '-' + mi;
   return {
     csv: csv, gpx: gpx, kml: kml,
     dateStr: dateStr,
@@ -3248,10 +3283,31 @@ function logCleanMode() {
   return sendCfg().clean !== false; // default ON
 }
 
+// ── Send-once bookkeeping ───────────────────────────────────────────
+// autoSend has four triggers (unlock, logger stopped, back online, app
+// startup). Deleting the local log used to be the ONLY thing stopping a
+// second one firing, so "keep on device" — or simply reopening the app —
+// re-mailed a dive that had already gone out. Worse, the startup trigger
+// would mail a log that was still being written, so one dive arrived twice:
+// once half-finished, once complete. Two rules fix it:
+//   1. never auto-send while the logger is still running
+//   2. remember what was last sent, and never send identical content twice
+var SENT_KEY = 'divenav_lastsent';
+function logSignature(rows) {
+  return rows.length + ':' + rows[0].ts + ':' + rows[rows.length - 1].tsEnd;
+}
+function lastSentSignature() {
+  try { return localStorage.getItem(SENT_KEY) || ''; } catch (e) { return ''; }
+}
+function markSent(sig) {
+  try { localStorage.setItem(SENT_KEY, sig); } catch (e) {}
+}
+
 var _uploading = false;
 function uploadLog(files, cb, png, pngName) {
   var cfg = sendCfg();
-  if (!cfg.url || _uploading) { cb(false, 'not configured'); return; }
+  if (!cfg.url) { cb(false, 'no endpoint configured'); return; }
+  if (_uploading) { cb(false, 'another upload is already running'); return; }
   if (cfg.url.indexOf('https://') !== 0) { cb(false, 'endpoint must be https'); return; }
   _uploading = true;
   var fd = new FormData();
@@ -3275,16 +3331,28 @@ function uploadLog(files, cb, png, pngName) {
 
 // Silent upload attempt - used when the logger stops, on reconnect and at
 // startup. Only clears the local log once the endpoint has confirmed.
-function autoSend(reason, png, pngName) {
+function autoSend(reason, png, pngName, force) {
   if (!sendCfg().url) return;
+  // A dive in progress is not a finished log. The startup and back-online
+  // triggers must never mail one; only an explicit stop, unlock or tap may.
+  if (loggerActive && !force) {
+    log('Auto-send (' + reason + ') skipped - still logging', 'linf');
+    return;
+  }
   getAllLogFixes(function(fixes) {
     var rows = exportRows(fixes);
     if (!rows.length) return;
+    var sig = logSignature(rows);
+    if (!force && sig === lastSentSignature()) {
+      log('Auto-send (' + reason + ') skipped - this log was already emailed', 'linf');
+      return;
+    }
     var files = buildLogFiles(rows);
     log('Auto-send (' + reason + '): uploading ' + rows.length + ' points'
         + (png ? ' + map' : '') + '...', 'linf');
     uploadLog(files, function(ok, err) {
       if (ok) {
+        markSent(sig);   // before any clear, so a failed clear can't re-send
         if (sendCfg().keep) { log('Log emailed (' + rows.length + ' points) - kept on device', 'lok'); return; }
         clearLogFixes(function() { updateLogUI(0); log('Log emailed (' + rows.length + ' points) and cleared', 'lok'); });
       } else {
@@ -3303,7 +3371,7 @@ document.getElementById('loggerSendBtn').addEventListener('click', function() {
     log('Preparing ' + rows.length + ' points (' + (logCleanMode() ? 'GPS-only' : 'raw') + ')', 'linf');
 
     // 1. Configured endpoint - the only fully automatic route.
-    if (sendCfg().url) autoSend('send button');
+    if (sendCfg().url) autoSend('send button', null, null, true);
 
     // 2. Share sheet: the only path that attaches all three files to a mail
     //    on Android/iOS. Needs this tap, so it must run synchronously here.
