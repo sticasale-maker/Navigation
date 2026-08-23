@@ -1062,11 +1062,29 @@ function exitDiveLock() {
   document.removeEventListener('touchmove', blockScroll, { capture: true });
   document.getElementById('diveLockShield').style.display = 'none';
   // stop the data logger with the unlock
-  if (loggerActive) stopLogger();
+  if (loggerActive) stopLogger({ deferSend: true });
   var btn = document.getElementById('lockBtn');
   btn.textContent = '🔒 LOCK';
   btn.classList.remove('locked');
   window.removeEventListener('devicemotion', absorbEvent, { capture: true });
+
+  // The dive is over: draw the surfacing map, save it to the phone, and send
+  // it with the log. The upload waits for the map but never longer than
+  // MAP_WAIT_MS, so a slow or absent network can't stop the log going out.
+  var sent = false;
+  function sendOnce(png, name) {
+    if (sent) return;
+    sent = true;
+    autoSend('dive ended', png, name);
+  }
+  var mapTimer = setTimeout(function () {
+    log('Map still building \u2014 sending log without it', 'lerr');
+    sendOnce(null, null);
+  }, MAP_WAIT_MS);
+  saveSurfacingMap(function (png, name) {
+    clearTimeout(mapTimer);
+    sendOnce(png, name);
+  });
 }
 
 document.getElementById('lockBtn').addEventListener('click', function() {
@@ -1808,6 +1826,32 @@ function tileURL(z, x, y) {
   return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/'
        + z + '/' + y + '/' + x;
 }
+// Promises for every basemap tile covering a pixel-space region at zoom z.
+// A tile that fails (offline, blocked) resolves to null rather than rejecting,
+// so a missing tile degrades the map instead of failing the render. Shared by
+// the waypoint map and the surfacing map.
+function mapTileJobs(z, minGx, minGy, maxGx, maxGy) {
+  var maxIdx = Math.pow(2, z) - 1;
+  var txMin = Math.floor(minGx / TILE_SZ), txMax = Math.floor(maxGx / TILE_SZ);
+  var tyMin = Math.floor(minGy / TILE_SZ), tyMax = Math.floor(maxGy / TILE_SZ);
+  var jobs = [];
+  for (var tx = txMin; tx <= txMax; tx++) {
+    for (var ty = tyMin; ty <= tyMax; ty++) {
+      (function (tx, ty) {
+        jobs.push(new Promise(function (resolve) {
+          if (tx < 0 || ty < 0 || tx > maxIdx || ty > maxIdx) { resolve(null); return; }
+          var img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = function () { resolve({ img: img, tx: tx, ty: ty }); };
+          img.onerror = function () { resolve(null); };
+          img.src = tileURL(z, tx, ty);
+        }));
+      })(tx, ty);
+    }
+  }
+  return jobs;
+}
+
 function lon2px(lon, z) { return (lon + 180) / 360 * TILE_SZ * Math.pow(2, z); }
 function lat2px(lat, z) {
   var s = Math.max(Math.min(Math.sin(lat * D2R_M), 0.9999), -0.9999);
@@ -2073,24 +2117,7 @@ function renderMapImage(entry) {
   function CY(lat) { return boxTop  + (lat2px(lat, z) - minGy) * scale; }
 
   // Load the basemap tiles covering the plot region (native tile grid).
-  var maxIdx = Math.pow(2, z) - 1;
-  var txMin = Math.floor(minGx / TILE_SZ), txMax = Math.floor(maxGx / TILE_SZ);
-  var tyMin = Math.floor(minGy / TILE_SZ), tyMax = Math.floor(maxGy / TILE_SZ);
-  var jobs = [];
-  for (var tx = txMin; tx <= txMax; tx++) {
-    for (var ty = tyMin; ty <= tyMax; ty++) {
-      (function (tx, ty) {
-        jobs.push(new Promise(function (resolve) {
-          if (tx < 0 || ty < 0 || tx > maxIdx || ty > maxIdx) { resolve(null); return; }
-          var img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.onload = function () { resolve({ img: img, tx: tx, ty: ty }); };
-          img.onerror = function () { resolve(null); };
-          img.src = tileURL(z, tx, ty);
-        }));
-      })(tx, ty);
-    }
-  }
+  var jobs = mapTileJobs(z, minGx, minGy, maxGx, maxGy);
 
   // Optional SEED / ArcGIS dynamic overlays for the same bbox (skipped if off
   // or if they fail to load). One /export image per overlay, drawn to the plot.
@@ -2393,6 +2420,328 @@ document.getElementById('mapPreviewSend').addEventListener('click', function () 
   }
 });
 
+// ════════════════════════════════════════════════════════════════════
+//  SURFACING MAP
+//  Built automatically when the dive lock is released. Underwater there is
+//  no GPS, so the only trustworthy positions in a dive log are the ones
+//  recorded while the phone was actually at the surface. For each surfacing
+//  this takes the LAST fix before the signal went again — the point where
+//  you left the surface — which is what you want to navigate back to.
+// ════════════════════════════════════════════════════════════════════
+
+var MAP_WAIT_MS = 20000;   // never let a slow tile fetch hold up the email
+
+// Collapse a normalised log into one entry per surfacing.
+function surfacingFixes(rows) {
+  var runs = [], cur = null;
+  rows.forEach(function (r) {
+    if (r.gps) {
+      if (!cur) cur = { start: r.ts, last: r, n: 0, best: r.acc };
+      cur.last = r;                       // keep overwriting: the last wins
+      cur.n += (r.n || 1);
+      if (r.acc < cur.best) cur.best = r.acc;
+    } else if (cur) {
+      runs.push(cur); cur = null;         // went under again — run ends here
+    }
+  });
+  if (cur) runs.push(cur);                // still surfaced when the log ended
+  return runs.map(function (s) {
+    return {
+      lat: s.last.lat, lon: s.last.lon, acc: s.last.acc,
+      ts: s.last.tsEnd || s.last.ts,      // moment of the chosen fix
+      start: s.start, samples: s.n, best: s.best
+    };
+  });
+}
+
+function renderSurfacingMap(fixes, cb) {
+  var MONO = '"Menlo","Courier New",monospace';
+  var PAD = 42, HEADER = 104, ROW_H = 32, COLGAP = 30;
+
+  // ── Frame the points ──
+  var minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  fixes.forEach(function (p) {
+    if (p.lat < minLat) minLat = p.lat; if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon; if (p.lon > maxLon) maxLon = p.lon;
+  });
+  var dLat = maxLat - minLat, dLon = maxLon - minLon;
+  var mLat = Math.max(dLat * 0.20, 0.0010), mLon = Math.max(dLon * 0.20, 0.0010);
+  minLat -= mLat; maxLat += mLat; minLon -= mLon; maxLon += mLon;
+
+  var MAX_ASPECT = 0.78;
+  var spW0 = (maxLon - minLon) * (TILE_SZ / 360);
+  var spH0 = lat2px(minLat, 0) - lat2px(maxLat, 0);
+  if (spH0 / spW0 > MAX_ASPECT) {
+    var addLon = (spH0 / MAX_ASPECT - spW0) / (TILE_SZ / 360);
+    minLon -= addLon / 2; maxLon += addLon / 2;
+  }
+
+  var TILECAP = 1300, z;
+  for (z = 19; z >= 3; z--) {
+    var w = lon2px(maxLon, z) - lon2px(minLon, z);
+    var h = lat2px(minLat, z) - lat2px(maxLat, z);
+    if (w <= TILECAP && h <= TILECAP) break;
+  }
+  var minGx = lon2px(minLon, z), maxGx = lon2px(maxLon, z);
+  var minGy = lat2px(maxLat, z), maxGy = lat2px(minLat, z);
+  var nativeW = Math.max(maxGx - minGx, 1), nativeH = Math.max(maxGy - minGy, 1);
+
+  // ── Distances between consecutive surfacings ──
+  var totalM = 0;
+  for (var i = 1; i < fixes.length; i++)
+    totalM += haversine(fixes[i-1].lat, fixes[i-1].lon, fixes[i].lat, fixes[i].lon);
+  var totalD = fmtDist(totalM), totalStr = totalD.v + totalD.u;
+
+  var t0 = new Date(fixes[0].start), t1 = new Date(fixes[fixes.length-1].ts);
+  var durMin = Math.max(0, Math.round((t1 - t0) / 60000));
+
+  // ── Measure before sizing the canvas, so nothing runs off the edge ──
+  var cv = document.createElement('canvas');
+  var ctx = cv.getContext('2d');
+  var nameMaxW = 0, coordMaxW = 0;
+  function _nameW(str) { ctx.font = 'bold 22px ' + MONO; var w = ctx.measureText(str).width; if (w > nameMaxW) nameMaxW = w; }
+  function _coordW(str) { ctx.font = '22px ' + MONO; var w = ctx.measureText(str).width; if (w > coordMaxW) coordMaxW = w; }
+  fixes.forEach(function (p, k) {
+    _nameW((k+1) + '. ' + kmlLocalTime(p.ts) + '  ±' + Math.round(p.acc) + 'm');
+    _coordW(fmtCoord(p.lat, p.lon));
+  });
+  _nameW('TOTAL BETWEEN SURFACINGS'); _coordW(totalStr);
+
+  var stampH = kmlLocalDate(fixes[0].start) + '  ' + kmlLocalTime(fixes[0].start);
+  var subStr = stampH + '   ·   ' + fixes.length + ' surfacing'
+             + (fixes.length === 1 ? '' : 's') + '   ·   ' + durMin + ' min'
+             + '   ·   ' + totalStr + ' between';
+  ctx.font = '23px ' + MONO; var subW = ctx.measureText(subStr).width;
+  ctx.font = 'bold 38px ' + MONO;
+  var titleW = ctx.measureText('DIVENAV — SURFACING MAP').width;
+
+  var nameColX = PAD + 30;
+  var footerReqW = nameColX + nameMaxW + COLGAP + coordMaxW + PAD;
+  var headerReqW = PAD + Math.max(subW, titleW) + PAD;
+  var BASE_MAP_W = 1180;
+  var canvasW = Math.round(Math.max(BASE_MAP_W + 2 * PAD, footerReqW, headerReqW, 480));
+  var plotW = canvasW - 2 * PAD;
+  var scale = plotW / nativeW;
+  var plotH = Math.round(nativeH * scale);
+  var FOOTER = 54 + (fixes.length + 1) * ROW_H + 22;
+  var canvasH = Math.round(HEADER + plotH + 2 * PAD + FOOTER);
+  var boxLeft = PAD, boxTop = HEADER + PAD;
+
+  cv.width = canvasW; cv.height = canvasH;
+  ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0a0e12';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  function CX(lon) { return boxLeft + (lon2px(lon, z) - minGx) * scale; }
+  function CY(lat) { return boxTop  + (lat2px(lat, z) - minGy) * scale; }
+
+  function chip(text, cx, cy, font, color, rightAlign) {
+    ctx.font = font; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    var w = ctx.measureText(text).width;
+    var x = rightAlign ? cx - w : cx;
+    ctx.fillStyle = 'rgba(8,12,16,0.78)';
+    ctx.fillRect(x - 4, cy - 20, w + 8, 26);
+    ctx.fillStyle = color; ctx.fillText(text, x, cy);
+  }
+  function pickSide(cx, font, text) {
+    ctx.font = font; var w = ctx.measureText(text).width;
+    var spaceR = (boxLeft + plotW) - (cx + 22) - 4;
+    var spaceL = (cx - 22) - boxLeft - 4;
+    var onLeft = (w > spaceR) && (spaceL > spaceR);
+    return onLeft ? { x: cx - 22, right: true } : { x: cx + 22, right: false };
+  }
+
+  Promise.all(mapTileJobs(z, minGx, minGy, maxGx, maxGy)).then(function (tiles) {
+    var loaded = 0;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(boxLeft, boxTop, plotW, plotH); ctx.clip();
+    tiles.forEach(function (t) {
+      if (!t) return;
+      ctx.drawImage(t.img,
+        boxLeft + (t.tx * TILE_SZ - minGx) * scale,
+        boxTop  + (t.ty * TILE_SZ - minGy) * scale,
+        TILE_SZ * scale + 1, TILE_SZ * scale + 1);
+      loaded++;
+    });
+    if (loaded === 0) {
+      ctx.fillStyle = '#0d1620'; ctx.fillRect(boxLeft, boxTop, plotW, plotH);
+      ctx.strokeStyle = 'rgba(0,212,255,0.10)'; ctx.lineWidth = 1;
+      for (var gx = boxLeft; gx <= boxLeft + plotW; gx += 80) { ctx.beginPath(); ctx.moveTo(gx, boxTop); ctx.lineTo(gx, boxTop + plotH); ctx.stroke(); }
+      for (var gy = boxTop; gy <= boxTop + plotH; gy += 80) { ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke(); }
+    }
+    ctx.fillStyle = 'rgba(8,12,16,0.06)';
+    ctx.fillRect(boxLeft, boxTop, plotW, plotH);
+    ctx.restore();
+    draw(loaded);
+  }).catch(function () { draw(0); });
+
+  function draw(loaded) {
+    ctx.strokeStyle = 'rgba(0,212,255,0.35)'; ctx.lineWidth = 2;
+    ctx.strokeRect(boxLeft, boxTop, plotW, plotH);
+
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 38px ' + MONO;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('DIVENAV — SURFACING MAP', PAD, 56);
+    ctx.fillStyle = '#4a6070'; ctx.font = '23px ' + MONO;
+    ctx.fillText(subStr, PAD, 90);
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(boxLeft, boxTop, plotW, plotH); ctx.clip();
+
+    // Dashed track: the route between surfacings was underwater and never
+    // measured, so it is drawn as an inference, not as recorded data.
+    if (fixes.length > 1) {
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.setLineDash([12, 10]);
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(CX(fixes[0].lon), CY(fixes[0].lat));
+      for (var a = 1; a < fixes.length; a++) ctx.lineTo(CX(fixes[a].lon), CY(fixes[a].lat));
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,212,255,0.95)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(CX(fixes[0].lon), CY(fixes[0].lat));
+      for (var b = 1; b < fixes.length; b++) ctx.lineTo(CX(fixes[b].lon), CY(fixes[b].lat));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      for (var j = 1; j < fixes.length; j++) {
+        var pa = fixes[j-1], pb = fixes[j];
+        var d = fmtDist(haversine(pa.lat, pa.lon, pb.lat, pb.lon));
+        var mx = (CX(pa.lon) + CX(pb.lon)) / 2, my = (CY(pa.lat) + CY(pb.lat)) / 2;
+        var label = d.v + d.u;
+        ctx.textAlign = 'center'; ctx.font = '21px ' + MONO;
+        var lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(8,12,16,0.82)'; ctx.fillRect(mx - lw / 2 - 5, my - 24, lw + 10, 25);
+        ctx.fillStyle = '#bfe9ff'; ctx.fillText(label, mx, my - 6);
+      }
+    }
+
+    fixes.forEach(function (p, k) {
+      var cx = CX(p.lon), cy = CY(p.lat);
+      // Accuracy circle, to true scale, so the uncertainty is honest.
+      var mpp = (156543.03392 * Math.cos(p.lat * D2R_M) / Math.pow(2, z)) / scale;
+      var rPx = p.acc / mpp;
+      if (rPx > 3) {
+        ctx.strokeStyle = 'rgba(0,212,255,0.35)'; ctx.lineWidth = 2;
+        ctx.fillStyle = 'rgba(0,212,255,0.08)';
+        ctx.beginPath(); ctx.arc(cx, cy, rPx, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      ctx.fillStyle = '#00ff9d'; ctx.strokeStyle = '#0a0e12'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#0a0e12'; ctx.font = 'bold 22px ' + MONO;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(k + 1), cx, cy + 1);
+      ctx.textBaseline = 'alphabetic';
+
+      var coordStr = fmtCoord(p.lat, p.lon);
+      var timeStr = kmlLocalTime(p.ts) + '  ±' + Math.round(p.acc) + 'm';
+      ctx.font = 'bold 25px ' + MONO; var wt = ctx.measureText(timeStr).width;
+      ctx.font = '19px ' + MONO;      var wc = ctx.measureText(coordStr).width;
+      var ps = pickSide(cx, 'bold 25px ' + MONO, wt >= wc ? timeStr : coordStr);
+      chip(timeStr, ps.x, cy - 5, 'bold 25px ' + MONO, '#00ff9d', ps.right);
+      chip(coordStr, ps.x, cy + 19, '19px ' + MONO, '#dfeefa', ps.right);
+    });
+
+    if (myPos) {
+      var yx = CX(myPos.lon), yy = CY(myPos.lat);
+      if (yx >= boxLeft && yx <= boxLeft + plotW && yy >= boxTop && yy <= boxTop + plotH) {
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(yx, yy, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(yx, yy, 15, 0, Math.PI * 2); ctx.stroke();
+        var ys = pickSide(yx, 'bold 19px ' + MONO, 'YOU');
+        chip('YOU', ys.x, yy + 6, 'bold 19px ' + MONO, '#ffffff', ys.right);
+      }
+    }
+
+    ctx.restore();
+
+    // North arrow
+    var nax = canvasW - PAD - 30, nay = boxTop + 26;
+    ctx.strokeStyle = '#ffffff'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(nax, nay + 56); ctx.lineTo(nax, nay + 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(nax - 11, nay + 22); ctx.lineTo(nax, nay + 2); ctx.lineTo(nax + 11, nay + 22); ctx.closePath(); ctx.fill();
+    chip('N', nax - 7, nay + 86, 'bold 24px ' + MONO, '#ffffff');
+
+    // Scale bar
+    var centerLat = (minLat + maxLat) / 2;
+    var mppS = (156543.03392 * Math.cos(centerLat * D2R_M) / Math.pow(2, z)) / scale;
+    var niceSteps = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+    var targetM = 170 * mppS, stepM = niceSteps[niceSteps.length - 1];
+    for (var si = 0; si < niceSteps.length; si++) { if (niceSteps[si] >= targetM) { stepM = niceSteps[si]; break; } }
+    var stepPx = stepM / mppS;
+    var sbx = boxLeft + 16, sby = boxTop + plotH - 22;
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + stepPx, sby); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sbx, sby - 7); ctx.lineTo(sbx, sby + 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sbx + stepPx, sby - 7); ctx.lineTo(sbx + stepPx, sby + 7); ctx.stroke();
+    var sbLbl = fmtDist(stepM);
+    chip(sbLbl.v + sbLbl.u, sbx + stepPx + 10, sby + 6, '22px ' + MONO, '#ffffff');
+
+    ctx.font = '16px ' + MONO; ctx.textAlign = 'right';
+    var attr = loaded ? 'Map © Esri, HERE, Garmin, USGS, NGA' : 'No map tiles (offline) — schematic only';
+    var aw = ctx.measureText(attr).width;
+    ctx.fillStyle = 'rgba(8,12,16,0.7)'; ctx.fillRect(boxLeft + plotW - aw - 12, boxTop + plotH - 24, aw + 10, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText(attr, boxLeft + plotW - 6, boxTop + plotH - 7);
+
+    // ── Footer list ──
+    var coordX = canvasW - PAD;
+    var listTop = boxTop + plotH + PAD + 14;
+    ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD, listTop - 22); ctx.lineTo(canvasW - PAD, listTop - 22); ctx.stroke();
+    ctx.fillStyle = '#4a6070'; ctx.font = '22px ' + MONO; ctx.textAlign = 'left';
+    ctx.fillText('SURFACINGS (last fix before submerging)', PAD, listTop);
+    fixes.forEach(function (p, k) {
+      var ry = listTop + 28 + k * ROW_H;
+      ctx.fillStyle = '#00ff9d'; ctx.beginPath(); ctx.arc(PAD + 10, ry - 7, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'left';
+      ctx.fillText((k + 1) + '. ' + kmlLocalTime(p.ts) + '  ±' + Math.round(p.acc) + 'm', PAD + 30, ry);
+      ctx.fillStyle = '#7d96a6'; ctx.font = '22px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillText(fmtCoord(p.lat, p.lon), coordX, ry);
+    });
+    var ty = listTop + 28 + fixes.length * ROW_H;
+    ctx.strokeStyle = 'rgba(0,212,255,0.15)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD, ty - 22); ctx.lineTo(canvasW - PAD, ty - 22); ctx.stroke();
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 22px ' + MONO; ctx.textAlign = 'left';
+    ctx.fillText('TOTAL BETWEEN SURFACINGS', PAD + 30, ty);
+    ctx.textAlign = 'right'; ctx.fillText(totalStr, coordX, ty);
+
+    cb(cv, loaded);
+  }
+}
+
+// Build the surfacing map from the stored log, save it to the device, and
+// hand the PNG back so it can ride along with the log email.
+function saveSurfacingMap(cb) {
+  function done(blob, name) { if (cb) cb(blob || null, name || null); }
+  getAllLogFixes(function (all) {
+    var fixes = surfacingFixes(normLogRows(all));
+    if (!fixes.length) {
+      log('No surfacing positions in this log — no map', 'lerr');
+      done(null); return;
+    }
+    log('Building surfacing map (' + fixes.length + ' position'
+        + (fixes.length === 1 ? '' : 's') + ')…', 'linf');
+    var d = new Date(fixes[0].start);
+    var name = 'divenav_map_' + kmlLocalDate(fixes[0].start) + '_'
+             + _p2(d.getHours()) + '-' + _p2(d.getMinutes()) + '.png';
+    try {
+      renderSurfacingMap(fixes, function (cv, loaded) {
+        try {
+          cv.toBlob(function (blob) {
+            if (!blob) { log('Map render failed', 'lerr'); done(null); return; }
+            downloadMap(blob, name);
+            log('Surfacing map saved' + (loaded ? '' : ' (no imagery — offline)'), 'lok');
+            done(blob, name);
+          }, 'image/png');
+        } catch (e) {
+          log('Could not export map (CORS)', 'lerr'); done(null);
+        }
+      });
+    } catch (e) {
+      log('Map build failed: ' + (e.message || e), 'lerr'); done(null);
+    }
+  });
+}
+
 // ── GPS ──
 var _watchId = null;
 var _staleTick = null;
@@ -2666,7 +3015,7 @@ function startLogger() {
   log('Data logger started', 'linf');
 }
 
-function stopLogger() {
+function stopLogger(opts) {
   loggerActive = false;
   clearInterval(loggerInterval);
   loggerInterval = null;
@@ -2678,7 +3027,9 @@ function stopLogger() {
   document.getElementById('loggerLbl').textContent = 'LOGGER OFF';
   log('Data logger stopped', 'linf');
   countLogFixes(function(n) { updateLogUI(n); });
-  autoSend('logger stopped');   // silent upload if an endpoint is configured
+  // Releasing the dive lock defers this: it wants the surfacing map finished
+  // so the log and the map go out in a single email.
+  if (!(opts && opts.deferSend)) autoSend('logger stopped');
 }
 
 document.getElementById('loggerToggleBtn').addEventListener('click', function() {
@@ -2898,7 +3249,7 @@ function logCleanMode() {
 }
 
 var _uploading = false;
-function uploadLog(files, cb) {
+function uploadLog(files, cb, png, pngName) {
   var cfg = sendCfg();
   if (!cfg.url || _uploading) { cb(false, 'not configured'); return; }
   if (cfg.url.indexOf('https://') !== 0) { cb(false, 'endpoint must be https'); return; }
@@ -2910,6 +3261,7 @@ function uploadLog(files, cb) {
   fd.append('csv', new Blob([files.csv], { type: 'text/csv' }), files.stem + '.csv');
   fd.append('gpx', new Blob([files.gpx], { type: 'application/gpx+xml' }), files.stem + '.gpx');
   fd.append('kml', new Blob([files.kml], { type: 'application/vnd.google-earth.kml+xml' }), files.stem + '.kml');
+  if (png) fd.append('png', png, pngName || (files.stem + '.png'));
   var headers = {};
   if (cfg.token) headers['Authorization'] = 'Bearer ' + cfg.token;
   fetch(cfg.url, { method: 'POST', body: fd, headers: headers, mode: 'cors' })
@@ -2923,13 +3275,14 @@ function uploadLog(files, cb) {
 
 // Silent upload attempt - used when the logger stops, on reconnect and at
 // startup. Only clears the local log once the endpoint has confirmed.
-function autoSend(reason) {
+function autoSend(reason, png, pngName) {
   if (!sendCfg().url) return;
   getAllLogFixes(function(fixes) {
     var rows = exportRows(fixes);
     if (!rows.length) return;
     var files = buildLogFiles(rows);
-    log('Auto-send (' + reason + '): uploading ' + rows.length + ' points...', 'linf');
+    log('Auto-send (' + reason + '): uploading ' + rows.length + ' points'
+        + (png ? ' + map' : '') + '...', 'linf');
     uploadLog(files, function(ok, err) {
       if (ok) {
         if (sendCfg().keep) { log('Log emailed (' + rows.length + ' points) - kept on device', 'lok'); return; }
@@ -2937,7 +3290,7 @@ function autoSend(reason) {
       } else {
         log('Auto-send failed (' + err + ') - log kept, will retry', 'lerr');
       }
-    });
+    }, png, pngName);
   });
 }
 window.addEventListener('online', function() { autoSend('back online'); });
