@@ -1212,11 +1212,7 @@ openDB(function(db) {
     };
   } catch(e) {}
   // Seed log fix count for UI
-  try {
-    var tx2 = db.transaction('gpslog', 'readonly');
-    var req2 = tx2.objectStore('gpslog').count();
-    req2.onsuccess = function() { updateLogUI(req2.result); };
-  } catch(e) {}
+  refreshLogUI();
   // Reconcile waypoint library (merge DB copy with localStorage copy by id, newest wins)
   try {
     var tx3 = db.transaction(DB_STORE, 'readonly');
@@ -2715,7 +2711,9 @@ function renderSurfacingMap(fixes, cb) {
 function saveSurfacingMap(cb) {
   function done(blob, name) { if (cb) cb(blob || null, name || null); }
   getAllLogFixes(function (all) {
-    var fixes = surfacingFixes(normLogRows(all));
+    var rows = normLogRows(all);
+    // Same recording as the files, never a mix of two.
+    var fixes = surfacingFixes(rowsForSession(rows, targetSid(rows)));
     if (!fixes.length) {
       log('No surfacing positions in this log — no map', 'lerr');
       done(null); return;
@@ -2891,6 +2889,57 @@ var logCount = 0;
 var LOG_MIN_GAP_MS = 4000;   // <= 900 rows/hour even when moving continuously
 var LOG_MIN_MOVE_M = 3;      // closer than this = same spot, extend the run
 var LOG_CLEAN_ACC  = 50;     // metres - worse than this is not a usable fix
+// ── Recording sessions ──────────────────────────────────────────────
+// LOCK (or START LOG) opens a session; UNLOCK closes it. Every stored row
+// carries the id of the session that produced it, and an export never spans
+// more than one. Without this the store was just a bucket: a recording that
+// was never cleared — because "keep on device" was on, or an upload had
+// failed — got swept into the NEXT dive's files, which is how a GPX for one
+// morning ended up containing the previous afternoon's test.
+// The id is the session's start time in ms, so ids sort oldest-first, and it
+// lives in localStorage too, so reloading the page mid-dive rejoins the same
+// session instead of silently splitting it in two.
+var LOG_SID_KEY = 'divenav_sid';
+var _logSid = null;
+
+function newLogSession() {
+  _logSid = Date.now();
+  try { localStorage.setItem(LOG_SID_KEY, String(_logSid)); } catch (e) {}
+  return _logSid;
+}
+function currentLogSession() {
+  if (_logSid !== null) return _logSid;
+  try {
+    var v = localStorage.getItem(LOG_SID_KEY);
+    if (v) { _logSid = Number(v); return _logSid; }
+  } catch (e) {}
+  return null;
+}
+// Which session an export should cover: the live one when its rows are
+// present, otherwise the newest recording in the store. Returns null for a
+// log written by an older build, whose rows carry no session at all.
+function targetSid(rows) {
+  var cur = currentLogSession(), have = {}, newest = null;
+  rows.forEach(function (r) {
+    if (typeof r.sid !== 'number') return;
+    have[r.sid] = true;
+    if (newest === null || r.sid > newest) newest = r.sid;
+  });
+  if (cur !== null && have[cur]) return cur;
+  return newest;
+}
+function rowsForSession(rows, sid) {
+  if (sid === null || sid === undefined) return rows;   // untagged legacy log
+  return rows.filter(function (r) { return r.sid === sid; });
+}
+function sidsIn(rows) {
+  var out = [];
+  rows.forEach(function (r) {
+    if (typeof r.sid === 'number' && out.indexOf(r.sid) === -1) out.push(r.sid);
+  });
+  return out.sort(function (a, b) { return a - b; });
+}
+
 var _logLastKey   = null;    // IDB key of the row currently being extended
 var _logLastRec   = null;
 var _logLastWrite = 0;
@@ -2910,7 +2959,7 @@ function _logAdd(rec) {
       _logLastKey = req.result;
       _logAdding  = false;
       if (_logDirty) { _logDirty = false; _logUpdate(); }
-      countLogFixes(function(n) { updateLogUI(n); });
+      refreshLogUI();
     };
     req.onerror = function() { _logAdding = false; };
   } catch(e) { _logAdding = false; }
@@ -2956,7 +3005,8 @@ function saveLogFix() {
   _logLastWrite = now;
   var iso = new Date(now).toISOString();
   _logLastRec = { ts: iso, tsEnd: iso, lat: rawPos.lat, lon: rawPos.lon,
-                  acc: rawPos.acc, n: 1, gps: gps };
+                  acc: rawPos.acc, n: 1, gps: gps,
+                  sid: currentLogSession() === null ? newLogSession() : currentLogSession() };
   _logLastKey = null;
   _logAdd(_logLastRec);
 }
@@ -2991,21 +3041,54 @@ function clearLogFixes(cb) {
     tx.objectStore(LOG_STORE).clear();
     tx.oncomplete = function() {
       _logLastRec = null; _logLastKey = null; _logLastWrite = 0; _logAdding = false; _logDirty = false;
+      try { localStorage.removeItem(SENT_SIDS_KEY); localStorage.removeItem(SENT_KEY); } catch(e) {}
       if(cb) cb();
     };
   } catch(e) { if(cb) cb(); }
 }
 
-function updateLogUI(n) {
+// Remove only the rows belonging to one recording, so confirming a late
+// upload can never wipe a dive that has started since.
+function deleteSessionRows(sid, cb) {
+  if (!_db || sid === null || sid === undefined) { clearLogFixes(cb); return; }
+  try {
+    var tx = _db.transaction(LOG_STORE, 'readwrite');
+    tx.objectStore(LOG_STORE).openCursor().onsuccess = function (e) {
+      var cur = e.target.result;
+      if (!cur) return;
+      if (cur.value && cur.value.sid === sid) cur.delete();
+      cur.continue();
+    };
+    tx.oncomplete = function () {
+      if (_logSid === sid) { _logLastRec = null; _logLastKey = null; }
+      if (cb) cb();
+    };
+    tx.onerror = function () { if (cb) cb(); };
+  } catch (e) { if (cb) cb(); }
+}
+
+// The counter reflects the CURRENT recording; anything held back from an
+// earlier one is shown separately rather than silently inflating the number.
+function updateLogUI(n, total) {
   logCount = n;
-  document.getElementById('loggerCount').textContent = n + ' pt' + (n === 1 ? '' : 's');
-  document.getElementById('loggerSendBtn').disabled = (n === 0);
-  document.getElementById('loggerDelBtn').disabled  = (n === 0);
+  if (total === undefined) total = n;
+  var held = Math.max(0, total - n);
+  document.getElementById('loggerCount').textContent =
+    n + ' pt' + (n === 1 ? '' : 's') + (held ? ' (+' + held + ' held)' : '');
+  document.getElementById('loggerSendBtn').disabled = (total === 0);
+  document.getElementById('loggerDelBtn').disabled  = (total === 0);
+}
+
+function refreshLogUI() {
+  getAllLogFixes(function (all) {
+    var rows = normLogRows(all);
+    updateLogUI(rowsForSession(rows, targetSid(rows)).length, all.length);
+  });
 }
 
 function startLogger() {
   loggerActive = true;
-  markSent('');   // a new recording is new content, not a resend
+  newLogSession();   // everything from here belongs to THIS recording
   // Never extend a row from a previous session - start a fresh one.
   _logLastRec = null; _logLastKey = null; _logLastWrite = 0; _logAdding = false; _logDirty = false;
   var btn = document.getElementById('loggerToggleBtn');
@@ -3029,7 +3112,7 @@ function stopLogger(opts) {
   document.getElementById('loggerDot').className = 'ldot off';
   document.getElementById('loggerLbl').textContent = 'LOGGER OFF';
   log('Data logger stopped', 'linf');
-  countLogFixes(function(n) { updateLogUI(n); });
+  refreshLogUI();
   // Releasing the dive lock defers this: it wants the surfacing map finished
   // so the log and the map go out in a single email.
   if (!(opts && opts.deferSend)) autoSend('logger stopped');
@@ -3055,7 +3138,7 @@ function normLogRows(fixes) {
     var acc = (typeof f.acc === 'number') ? f.acc : 999;
     return {
       ts: f.ts, tsEnd: f.tsEnd || f.ts,
-      lat: f.lat, lon: f.lon, acc: acc, n: f.n || 1,
+      lat: f.lat, lon: f.lon, acc: acc, n: f.n || 1, sid: f.sid,
       // rows written by older builds carry no quality flag - infer it
       gps: (typeof f.gps === 'boolean') ? f.gps : (acc <= LOG_CLEAN_ACC)
     };
@@ -3199,8 +3282,11 @@ function buildLogFiles(rows) {
 }
 
 // Assemble the rows we actually want to export.
-function exportRows(fixes) {
-  var rows = normLogRows(fixes);
+function exportRows(fixes, sid) {
+  var all = normLogRows(fixes);
+  if (!all.length) return all;
+  // Scope to a single recording before anything else is decided.
+  var rows = rowsForSession(all, sid === undefined ? targetSid(all) : sid);
   if (!rows.length) return rows;
   if (logCleanMode()) {
     var clean = cleanLogRows(rows);
@@ -3292,7 +3378,8 @@ function logCleanMode() {
 // once half-finished, once complete. Two rules fix it:
 //   1. never auto-send while the logger is still running
 //   2. remember what was last sent, and never send identical content twice
-var SENT_KEY = 'divenav_lastsent';
+var SENT_KEY = 'divenav_lastsent';        // signature, for untagged legacy logs
+var SENT_SIDS_KEY = 'divenav_sentsids';   // recordings already emailed
 function logSignature(rows) {
   return rows.length + ':' + rows[0].ts + ':' + rows[rows.length - 1].tsEnd;
 }
@@ -3301,6 +3388,21 @@ function lastSentSignature() {
 }
 function markSent(sig) {
   try { localStorage.setItem(SENT_KEY, sig); } catch (e) {}
+}
+function sentSids() {
+  try { return JSON.parse(localStorage.getItem(SENT_SIDS_KEY) || '[]') || []; }
+  catch (e) { return []; }
+}
+function isSessionSent(sid, sig) {
+  if (sid === null || sid === undefined) return !!sig && sig === lastSentSignature();
+  return sentSids().indexOf(sid) !== -1;
+}
+function markSessionSent(sid, sig) {
+  if (sid === null || sid === undefined) { markSent(sig); return; }
+  var list = sentSids();
+  if (list.indexOf(sid) === -1) list.push(sid);
+  if (list.length > 50) list = list.slice(list.length - 50);
+  try { localStorage.setItem(SENT_SIDS_KEY, JSON.stringify(list)); } catch (e) {}
 }
 
 var _uploading = false;
@@ -3331,7 +3433,7 @@ function uploadLog(files, cb, png, pngName) {
 
 // Silent upload attempt - used when the logger stops, on reconnect and at
 // startup. Only clears the local log once the endpoint has confirmed.
-function autoSend(reason, png, pngName, force) {
+function autoSend(reason, png, pngName, force, sid) {
   if (!sendCfg().url) return;
   // A dive in progress is not a finished log. The startup and back-online
   // triggers must never mail one; only an explicit stop, unlock or tap may.
@@ -3340,11 +3442,14 @@ function autoSend(reason, png, pngName, force) {
     return;
   }
   getAllLogFixes(function(fixes) {
-    var rows = exportRows(fixes);
+    var all = normLogRows(fixes);
+    if (!all.length) return;
+    var target = (sid === undefined) ? targetSid(all) : sid;
+    var rows = exportRows(fixes, target);
     if (!rows.length) return;
     var sig = logSignature(rows);
-    if (!force && sig === lastSentSignature()) {
-      log('Auto-send (' + reason + ') skipped - this log was already emailed', 'linf');
+    if (!force && isSessionSent(target, sig)) {
+      log('Auto-send (' + reason + ') skipped - that recording was already emailed', 'linf');
       return;
     }
     var files = buildLogFiles(rows);
@@ -3352,20 +3457,47 @@ function autoSend(reason, png, pngName, force) {
         + (png ? ' + map' : '') + '...', 'linf');
     uploadLog(files, function(ok, err) {
       if (ok) {
-        markSent(sig);   // before any clear, so a failed clear can't re-send
-        if (sendCfg().keep) { log('Log emailed (' + rows.length + ' points) - kept on device', 'lok'); return; }
-        clearLogFixes(function() { updateLogUI(0); log('Log emailed (' + rows.length + ' points) and cleared', 'lok'); });
+        markSessionSent(target, sig);  // before any delete, so a failed
+                                       // delete cannot cause a resend
+        if (sendCfg().keep) {
+          log('Log emailed (' + rows.length + ' points) - kept on device', 'lok');
+          refreshLogUI(); return;
+        }
+        deleteSessionRows(target, function() {
+          refreshLogUI();
+          log('Log emailed (' + rows.length + ' points) and cleared', 'lok');
+        });
       } else {
         log('Auto-send failed (' + err + ') - log kept, will retry', 'lerr');
       }
     }, png, pngName);
   });
 }
-window.addEventListener('online', function() { autoSend('back online'); });
+
+// Startup / reconnect retry. Picks ONE target: the oldest recording that has
+// not been emailed yet, never the one being recorded right now. An unsent
+// dive from days ago therefore goes out as its own message rather than being
+// folded into whatever is logged next.
+function retrySend(reason) {
+  if (!sendCfg().url || loggerActive) return;
+  getAllLogFixes(function (fixes) {
+    var all = normLogRows(fixes);
+    if (!all.length) return;
+    var sids = sidsIn(all);
+    if (!sids.length) { autoSend(reason, null, null, false, null); return; }
+    for (var i = 0; i < sids.length; i++) {
+      if (!isSessionSent(sids[i])) {
+        autoSend(reason, null, null, false, sids[i]);
+        return;
+      }
+    }
+  });
+}
+window.addEventListener('online', function() { retrySend('back online'); });
 
 document.getElementById('loggerSendBtn').addEventListener('click', function() {
   getAllLogFixes(function(fixes) {
-    var rows = exportRows(fixes);
+    var rows = exportRows(fixes);   // current recording only
     if (!rows.length) { log('Nothing to send', 'lerr'); return; }
     var files = buildLogFiles(rows);
     log('Preparing ' + rows.length + ' points (' + (logCleanMode() ? 'GPS-only' : 'raw') + ')', 'linf');
@@ -3441,7 +3573,7 @@ document.getElementById('cfgSave').addEventListener('click', function() {
 
 // Anything left over from a previous dive (upload failed, app closed) goes
 // out as soon as the app is opened again.
-setTimeout(function() { autoSend('startup'); }, 4000);
+setTimeout(function() { retrySend('startup'); }, 4000);
 
 </script>
 <div id="delLogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);align-items:center;justify-content:center;z-index:300;padding:20px;">
@@ -3450,7 +3582,7 @@ setTimeout(function() { autoSend('startup'); }, 4000);
     <div style="font-size:16px;color:var(--text);text-align:center;line-height:1.7;">This will permanently delete all recorded fixes. This cannot be undone.</div>
     <div style="display:flex;gap:10px;">
       <button onclick="document.getElementById('delLogModal').style.display='none';" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">CANCEL</button>
-      <button onclick="document.getElementById('delLogModal').style.display='none'; clearLogFixes(function(){ updateLogUI(0); log('Log deleted','lerr'); });" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid rgba(255,107,53,0.6);background:rgba(255,107,53,0.1);color:var(--warn);cursor:pointer;">DELETE</button>
+      <button onclick="document.getElementById('delLogModal').style.display='none'; clearLogFixes(function(){ updateLogUI(0, 0); log('Log deleted','lerr'); });" style="flex:1;padding:14px;font-family:'Share Tech Mono',monospace;font-size:14px;letter-spacing:2px;border-radius:8px;border:1px solid rgba(255,107,53,0.6);background:rgba(255,107,53,0.1);color:var(--warn);cursor:pointer;">DELETE</button>
     </div>
   </div>
 </div>
