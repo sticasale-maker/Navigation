@@ -2065,7 +2065,7 @@ function renderMapImage(entry) {
   // ── Layout (kept tight to avoid empty space) ──
   // Text sizes are set for a phone: the image is ~1260px wide and is looked
   // at on a screen a third of that, so anything under ~28px is unreadable.
-  var PAD = 42, HEADER = 132, ROW_H = 90, COLGAP = 60;
+  var PAD = 42, HEADER = 190, ROW_H = 90, COLGAP = 60;
   var MONO = '"Menlo","Courier New",monospace';
   var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
 
@@ -2097,10 +2097,17 @@ function renderMapImage(entry) {
   function _ph(n){ return (n<10?'0':'')+n; }
   var stampH = nowH.getFullYear()+'-'+_ph(nowH.getMonth()+1)+'-'+_ph(nowH.getDate())
              +'  '+_ph(nowH.getHours())+':'+_ph(nowH.getMinutes());
-  var subStr = stampH + '   ·   ' + pts.length + ' wpt   ·   ' + totalStr + ' loop'
-             + (entry ? '   ·   from ' + entry.name : '');
-  ctx.font = '28px ' + MONO; var subW = ctx.measureText(subStr).width;
-  ctx.font = 'bold 52px ' + MONO; var titleW = ctx.measureText('DIVENAV — DIVE MAP').width;
+  // Running time: how long the whole route takes to swim at a steady pace.
+  var SWIM_M_PER_MIN = 40;
+  var runMin = Math.round(totalM / SWIM_M_PER_MIN);
+  var runStr = runMin < 60 ? runMin + ' min'
+             : Math.floor(runMin / 60) + ' h ' + _ph(runMin % 60) + ' min';
+  // Two lines, so the text can be large without widening the whole image.
+  var subStr = totalStr + (entry ? ' loop' : ' route')
+             + (totalM > 0 ? ' · running time ' + runStr + ' (' + SWIM_M_PER_MIN + ' m/min)' : '');
+  var subStr2 = pts.length + ' wpt' + (entry ? ' · from ' + entry.name : '') + ' · ' + stampH;
+  ctx.font = '44px ' + MONO; var subW = Math.max(ctx.measureText(subStr).width, ctx.measureText(subStr2).width);
+  ctx.font = 'bold 76px ' + MONO; var titleW = ctx.measureText('DIVENAV — DIVE MAP').width;
 
   var nameColX = PAD + 64;
   var footerReqW = nameColX + nameMaxW + COLGAP + coordMaxW + PAD;
@@ -2203,10 +2210,11 @@ function renderMapImage(entry) {
     ctx.strokeRect(boxLeft, boxTop, plotW, plotH);
 
     // Header
-    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 52px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('DIVENAV — DIVE MAP', PAD, 66);
-    ctx.fillStyle = '#ffffff'; ctx.font = '28px ' + MONO;
-    ctx.fillText(subStr, PAD, 110);
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 76px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('DIVENAV — DIVE MAP', PAD, 86);
+    ctx.fillStyle = '#ffffff'; ctx.font = '44px ' + MONO;
+    ctx.fillText(subStr, PAD, 146);
+    ctx.fillText(subStr2, PAD, 200);
 
     // Clip overlays to the plot rectangle
     ctx.save();
