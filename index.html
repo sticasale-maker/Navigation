@@ -2065,7 +2065,7 @@ function renderMapImage(entry) {
   // ── Layout (kept tight to avoid empty space) ──
   // Text sizes are set for a phone: the image is ~1260px wide and is looked
   // at on a screen a third of that, so anything under ~28px is unreadable.
-  var PAD = 42, HEADER = 132, ROW_H = 46, COLGAP = 40;
+  var PAD = 42, HEADER = 132, ROW_H = 90, COLGAP = 60;
   var MONO = '"Menlo","Courier New",monospace';
   var DOT_COL = ['#00d4ff', '#00ff9d', '#ff9f43', '#ee5a9b'];
 
@@ -2086,8 +2086,8 @@ function renderMapImage(entry) {
   var exitLeg = entry ? legStr(pts[pts.length - 1], entry) : '';
 
   var nameMaxW = 0, coordMaxW = 0;
-  function _nameW(s){ ctx.font='bold 32px '+MONO; var w=ctx.measureText(s).width; if(w>nameMaxW)nameMaxW=w; }
-  function _coordW(s){ ctx.font='32px '+MONO; var w=ctx.measureText(s).width; if(w>coordMaxW)coordMaxW=w; }
+  function _nameW(s){ ctx.font='bold 64px '+MONO; var w=ctx.measureText(s).width; if(w>nameMaxW)nameMaxW=w; }
+  function _coordW(s){ ctx.font='64px '+MONO; var w=ctx.measureText(s).width; if(w>coordMaxW)coordMaxW=w; }
   if (entry) { _nameW('> ' + entry.name + ' (entry)'); _nameW('> ' + entry.name + ' (exit)'); _coordW('START'); _coordW(exitLeg); }
   pts.forEach(function (p, k) { _nameW((k+1) + '. ' + p.name); _coordW(legs[k]); });
   _nameW('TOTAL ROUTE (loop)'); _coordW(totalStr);
@@ -2102,7 +2102,7 @@ function renderMapImage(entry) {
   ctx.font = '28px ' + MONO; var subW = ctx.measureText(subStr).width;
   ctx.font = 'bold 52px ' + MONO; var titleW = ctx.measureText('DIVENAV — DIVE MAP').width;
 
-  var nameColX = PAD + 36;
+  var nameColX = PAD + 64;
   var footerReqW = nameColX + nameMaxW + COLGAP + coordMaxW + PAD;
   var headerReqW = PAD + Math.max(subW, titleW) + PAD;
 
@@ -2114,7 +2114,7 @@ function renderMapImage(entry) {
   var scale = plotW / nativeW;
   var plotH = Math.round(nativeH * scale);
   var listRows = pts.length + (entry ? 2 : 0) + 1;   // entry + exit rows, +1 = TOTAL ROUTE row
-  var FOOTER = 70 + listRows * ROW_H + 26;
+  var FOOTER = 110 + listRows * ROW_H + 40;
   var canvasH = Math.round(HEADER + plotH + 2 * PAD + FOOTER);
   var boxLeft = PAD;
   var boxTop  = HEADER + PAD;
@@ -2313,39 +2313,39 @@ function renderMapImage(entry) {
 
     // ── Sequence list footer: each waypoint with the distance to it ──
     var coordX = canvasW - PAD;
-    var listTop = boxTop + plotH + PAD + 20;
+    var listTop = boxTop + plotH + PAD + 40;
     ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(PAD, listTop - 32); ctx.lineTo(canvasW - PAD, listTop - 32); ctx.stroke();
-    ctx.fillStyle = '#ffffff'; ctx.font = '26px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.beginPath(); ctx.moveTo(PAD, listTop - 54); ctx.lineTo(canvasW - PAD, listTop - 54); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.font = '44px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('SEQUENCE', PAD, listTop);
     ctx.textAlign = 'right'; ctx.fillText('DISTANCE', coordX, listTop);
     var row = 0;
-    function _rowY() { return listTop + 46 + row * ROW_H; }
+    function _rowY() { return listTop + 92 + row * ROW_H; }
     function _entryRow(label, dist) {
       var ey2 = _rowY(); row++;
       ctx.fillStyle = '#ffd34d'; ctx.beginPath();
-      ctx.moveTo(PAD + 12, ey2 - 23); ctx.lineTo(PAD + 24, ey2 - 11); ctx.lineTo(PAD + 12, ey2 + 1); ctx.lineTo(PAD, ey2 - 11); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
+      ctx.moveTo(PAD + 22, ey2 - 44); ctx.lineTo(PAD + 44, ey2 - 22); ctx.lineTo(PAD + 22, ey2); ctx.lineTo(PAD, ey2 - 22); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 64px ' + MONO; ctx.textAlign = 'left';
       ctx.fillText('> ' + entry.name + ' (' + label + ')', nameColX, ey2);
-      ctx.fillStyle = '#ffffff'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillStyle = '#ffffff'; ctx.font = '64px ' + MONO; ctx.textAlign = 'right';
       ctx.fillText(dist, coordX, ey2);
     }
     if (entry) _entryRow('entry', 'START');
     pts.forEach(function (p, k) {
       var ry = _rowY(); row++;
       var col = DOT_COL[p.idx % DOT_COL.length];
-      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(PAD + 12, ry - 11, 11, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(PAD + 22, ry - 22, 20, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 64px ' + MONO; ctx.textAlign = 'left';
       ctx.fillText((k + 1) + '. ' + p.name, nameColX, ry);
-      ctx.fillStyle = '#ffffff'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillStyle = '#ffffff'; ctx.font = '64px ' + MONO; ctx.textAlign = 'right';
       ctx.fillText(legs[k], coordX, ry);
     });
     if (entry) _entryRow('exit', exitLeg);
     // Total route distance row
     var ty = _rowY();
     ctx.strokeStyle = 'rgba(0,212,255,0.15)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(PAD, ty - 34); ctx.lineTo(canvasW - PAD, ty - 34); ctx.stroke();
-    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
+    ctx.beginPath(); ctx.moveTo(PAD, ty - 68); ctx.lineTo(canvasW - PAD, ty - 68); ctx.stroke();
+    ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 64px ' + MONO; ctx.textAlign = 'left';
     ctx.fillText('TOTAL ROUTE' + (entry ? ' (loop)' : ''), nameColX, ty);
     ctx.textAlign = 'right'; ctx.fillText(totalStr, coordX, ty);
 

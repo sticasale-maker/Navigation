@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
 <title>DiveNav — Send waypoint</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 :root {
   --bg: #0a0e12;
@@ -77,48 +79,26 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
 .wp .sub { font: 12px var(--mono); color: var(--muted); margin-top: 2px; }
 .empty { font-size: 13px; color: var(--muted); }
 
-/* ── Map picking ── */
-#mapUi { display: flex; flex-direction: column; gap: 12px; }
-.tools, .modes { display: flex; gap: 6px; flex-wrap: wrap; }
-.modes button { padding: 8px 12px; font-size: 12px; letter-spacing: 1px; border-color: var(--border); color: var(--muted); background: transparent; }
-.modes button.on { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.12); }
+/* ── SEED map ── */
 #mapView {
-  position: relative; height: min(70vh, 640px); overflow: hidden;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-  touch-action: none; cursor: crosshair; user-select: none;
+  height: min(72vh, 680px); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; cursor: crosshair;
 }
-#mapView.drag { cursor: grabbing; }
-#mapImg { position: absolute; max-width: none; pointer-events: none; }
-#mapMarks { position: absolute; inset: 0; pointer-events: none; }
-.mk {
-  position: absolute; transform: translate(-50%, -50%);
-  width: 22px; height: 22px; border-radius: 50%;
-  font: 700 11px/18px var(--mono); text-align: center;
-  border: 2px solid #001018; box-shadow: 0 0 0 1px #fff;
-}
-.mk.ref { background: var(--accent); color: #001018; }
-.mk.pending { background: #fff; color: #001018; }
-.mk.pick { background: var(--warn); width: 16px; height: 16px; }
-/* A 1px dot at the exact spot, so the marker never hides what it marks. */
-.mk::after { content: ''; position: absolute; left: 50%; top: 50%; width: 2px; height: 2px; margin: -1px; background: #fff; border-radius: 50%; }
-.mk.ref::after, .mk.pending::after { display: none; }
-#mapReadout {
-  position: absolute; left: 8px; bottom: 8px; padding: 4px 8px; border-radius: 6px;
-  font: 13px var(--mono); color: var(--accent2); background: rgba(10,14,18,0.85); pointer-events: none;
-}
-#mapReadout:empty { display: none; }
-#refEntry { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--accent); border-radius: 8px; }
-#refEntry .tools button { flex: 1; padding: 10px; }
-#refParsed { font: 14px var(--mono); min-height: 21px; color: var(--accent2); }
-#refParsed.bad { color: var(--warn); }
-#mapErr { font-size: 14px; color: var(--warn); }
-#mapErr:empty { display: none; }
+#mapView.leaflet-container { font: 12px 'Segoe UI', system-ui, sans-serif; }
+.layers { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.layers label.check { font-size: 13px; gap: 6px; }
+.layers label.check input { width: 16px; height: 16px; }
+.modes { display: flex; gap: 6px; }
+.modes button { padding: 6px 10px; font-size: 12px; letter-spacing: 1px; border-color: var(--border); color: var(--muted); background: transparent; }
+.modes button.on { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.12); }
+#mapReadout { font: 13px var(--mono); color: var(--accent2); min-height: 20px; }
 #mapStatus { font-size: 14px; min-height: 21px; }
 #mapStatus.ok { color: var(--accent2); }
 #mapStatus.bad { color: var(--warn); }
-#refList { display: flex; flex-direction: column; gap: 6px; }
-.wp .err { color: var(--accent2); }
-.wp .err.bad { color: var(--warn); }
+#legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+#legend:empty { display: none; }
+#legend span { display: inline-flex; align-items: center; gap: 5px; }
+#legend img { width: 14px; height: 14px; }
 </style>
 </head>
 <body>
@@ -130,46 +110,18 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
   <div class="col-map">
   <section id="mapSec">
     <div class="row">
-      <h2>Pick from my map</h2>
-      <div class="tools">
-        <button class="quiet" id="mapChoose">CHOOSE MAP IMAGE</button>
-        <button class="quiet" id="mapRemove" hidden>REMOVE MAP</button>
+      <h2>Pick on the SEED map</h2>
+      <div class="modes">
+        <button id="baseTopo">MAP</button>
+        <button id="baseSat">SATELLITE</button>
       </div>
     </div>
-    <input id="mapFile" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg" hidden>
-    <div class="hint">Export the map from Illustrator (File → Export → Export As → PNG or SVG) and choose it here. Mark two or more spots whose real coordinates you know; after that, a click anywhere on the map gives its coordinates. The map and its reference points are kept in this browser and are not uploaded.</div>
-    <div id="mapErr"></div>
-    <div id="mapUi" hidden>
-      <div class="row">
-        <div class="modes">
-          <button id="modePick">PICK WAYPOINT</button>
-          <button id="modeRef">ADD REFERENCE POINT</button>
-        </div>
-        <div class="tools">
-          <button class="quiet" id="zoomOut" title="Zoom out">−</button>
-          <button class="quiet" id="zoomFit">FIT</button>
-          <button class="quiet" id="zoomIn" title="Zoom in">+</button>
-        </div>
-      </div>
-      <div id="mapView">
-        <img id="mapImg" alt="" draggable="false">
-        <div id="mapMarks"></div>
-        <div id="mapReadout"></div>
-      </div>
-      <div class="hint">Scroll to zoom, drag to move, click to mark a spot.</div>
-      <div id="refEntry" hidden>
-        <label>Real coordinates of the spot marked “?”
-          <input id="refCoords" type="text" autocomplete="off" spellcheck="false" placeholder="-33.80012, 151.29834">
-        </label>
-        <div id="refParsed"></div>
-        <div class="tools">
-          <button id="refAdd">ADD REFERENCE POINT</button>
-          <button class="quiet" id="refCancel">CANCEL</button>
-        </div>
-      </div>
-      <div id="mapStatus"></div>
-      <div id="refList"></div>
-    </div>
+    <div class="hint">NSW SEED seabed data over a base map. Scroll to zoom, drag to move, and click a spot to use it as the waypoint.</div>
+    <div class="layers" id="layerToggles"></div>
+    <div id="mapView"></div>
+    <div id="mapReadout"></div>
+    <div id="mapStatus"></div>
+    <div id="legend"></div>
   </section>
   </div>
 
@@ -389,7 +341,7 @@ function send() {
       setStatus('Sent: ' + w.name + ' at ' + fmt(w.lat, w.lon) + '. Waiting for the phone.', 'ok');
       $('name').value = ''; $('coords').value = ''; $('parsed').textContent = '';
       $('name').focus();
-      map.pick = null; drawMarks();
+      if (lmap) clearPick();
       return refresh();
     })
     .catch(function (err) {
@@ -403,405 +355,192 @@ $('send').addEventListener('click', send);
   $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') send(); });
 });
 
-// ── Map picking ─────────────────────────────────────────────────────
-// A map image with no georeferencing of its own (an Illustrator export) is
-// tied to the ground by reference points: spots marked on the image whose
-// real coordinates are typed in. The image is fitted to Web Mercator, which
-// is what a map traced from Google Maps or a chart already is at dive-site
-// scale. 2-3 points fit scale + rotation + position; 4 or more also absorb a
-// stretched or skewed drawing. With 3 or more, each point's miss against the
-// fit is shown in metres - the only honest measure of how far to trust a pick.
-var R_EARTH = 6378137, D2R = Math.PI / 180;
-var MAX_ZOOM = 40;            // screen px per image px
-var FIT_WARN_M = 10;          // a reference point missing by more is flagged
-var map = { w: 0, h: 0, name: '', blob: null, url: '', refs: [], fit: null,
-            pick: null, pendingRef: null, mode: 'ref', s: 1, tx: 0, ty: 0 };
-
-function mercX(lon) { return R_EARTH * lon * D2R; }
-// y grows southward, like image pixels, so a normal map needs no mirroring.
-function mercY(lat) { return -R_EARTH * Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2)); }
-function metresBetween(la1, lo1, la2, lo2) {
-  var dLa = (la2 - la1) * D2R, dLo = (lo2 - lo1) * D2R;
-  var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) +
-          Math.cos(la1 * D2R) * Math.cos(la2 * D2R) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
-  return 2 * 6371000 * Math.asin(Math.sqrt(h));
-}
-
-// Least-squares fit of image pixels to Mercator metres. Returns null when
-// the points cannot define a map (fewer than two, or on top of each other),
-// and { mirrored: true } when they only fit a flipped image.
-function solveFit(refs) {
-  var n = refs.length;
-  if (n < 2) return null;
-  var cx = 0, cy = 0, cu = 0, cv = 0, lat0 = 0;
-  var pts = refs.map(function (r) { return { x: r.x, y: r.y, u: mercX(r.lon), v: mercY(r.lat) }; });
-  pts.forEach(function (p) { cx += p.x / n; cy += p.y / n; cu += p.u / n; cv += p.v / n; });
-  refs.forEach(function (r) { lat0 += r.lat / n; });
-  var Sxx = 0, Sxy = 0, Syy = 0, Sxu = 0, Syu = 0, Sxv = 0, Syv = 0;
-  pts.forEach(function (p) {
-    var x = p.x - cx, y = p.y - cy, u = p.u - cu, v = p.v - cv;
-    Sxx += x * x; Sxy += x * y; Syy += y * y;
-    Sxu += x * u; Syu += y * u; Sxv += x * v; Syv += y * v;
-  });
-  var spread = Sxx + Syy;
-  if (!(spread > 0)) return null;
-  var A, B, D, E, kind;
-  var det = Sxx * Syy - Sxy * Sxy;
-  // The full affine fit needs four points that are not strung along a line.
-  if (n >= 4 && det > 1e-6 * spread * spread) {
-    A = (Sxu * Syy - Syu * Sxy) / det; B = (Syu * Sxx - Sxu * Sxy) / det;
-    D = (Sxv * Syy - Syv * Sxy) / det; E = (Syv * Sxx - Sxv * Sxy) / det;
-    kind = 'affine';
-  } else {
-    var a = (Sxu + Syv) / spread, b = (Sxv - Syu) / spread;
-    A = a; B = -b; D = b; E = a;
-    kind = 'similarity';
-  }
-  var lin = A * E - B * D;
-  if (lin < 0) return { mirrored: true };
-  if (!(lin > 0)) return null;
-  var fit = { kind: kind, cx: cx, cy: cy, cu: cu, cv: cv, A: A, B: B, D: D, E: E,
-              mPerPx: Math.sqrt(lin) * Math.cos(lat0 * D2R),
-              // compass direction the top of the image points to
-              upBearing: (Math.atan2(-B, E) / D2R + 360) % 360 };
-  fit.errors = refs.map(function (r) {
-    var ll = pixelToLatLon(fit, r.x, r.y);
-    return metresBetween(r.lat, r.lon, ll.lat, ll.lon);
-  });
-  return fit;
-}
-function pixelToLatLon(fit, x, y) {
-  var dx = x - fit.cx, dy = y - fit.cy;
-  var u = fit.cu + fit.A * dx + fit.B * dy, v = fit.cv + fit.D * dx + fit.E * dy;
-  return { lat: (2 * Math.atan(Math.exp(-v / R_EARTH)) - Math.PI / 2) / D2R, lon: u / R_EARTH / D2R };
-}
+// ── SEED map ────────────────────────────────────────────────────────
+// A click on the map is the waypoint. The seabed layers are the ones behind
+// the NSW SEED "show on map" link for the 2018 marine LiDAR survey and the
+// seabed landforms; they are untiled ArcGIS map services, so each is drawn as
+// one image of the current view, refetched whenever the view settles.
+// Listed bottom to top, with SEED's own opacities.
+var SEED = 'https://mapprod2.environment.nsw.gov.au/arcgis/rest/services/Coastal_Marine/';
+var LIDAR = SEED + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer';
+var LANDFORMS = SEED + 'SeabedLandforms/MapServer';
+var SEED_LAYERS = [
+  { key: 'dem',       label: 'Depth',            url: LIDAR,     layers: '2',     opacity: 0.7 },
+  { key: 'landforms', label: 'Seabed landforms', url: LANDFORMS, layers: '0,1,2', opacity: 0.6 },
+  { key: 'slope',     label: 'Slope',            url: LIDAR,     layers: '1',     opacity: 0.45 },
+  { key: 'isobaths',  label: '5 m contours',     url: LIDAR,     layers: '0',     opacity: 1 }
+];
+var SEED_MIN_ZOOM = 11;       // the services draw nothing useful further out
+var VIEW_KEY = 'divenav_pcmapview';
+var lmap = null, pickMarker = null, pickSeq = 0;
 
 function mapSay(msg, cls) {
   $('mapStatus').textContent = msg;
   $('mapStatus').className = cls || '';
 }
-function fmtM(m) { return m < 10 ? m.toFixed(1) + ' m' : Math.round(m) + ' m'; }
-
-// ── View: zoom, pan, markers ──
-function layoutMap() {
-  var img = $('mapImg');
-  img.style.width = (map.w * map.s) + 'px';
-  img.style.height = (map.h * map.s) + 'px';
-  img.style.left = map.tx + 'px';
-  img.style.top = map.ty + 'px';
-  drawMarks();
-}
-function fitScale() {
-  var v = $('mapView');
-  return Math.min(v.clientWidth / map.w, v.clientHeight / map.h) || 1;
-}
-function fitView() {
-  var v = $('mapView');
-  map.s = fitScale();
-  map.tx = (v.clientWidth - map.w * map.s) / 2;
-  map.ty = (v.clientHeight - map.h * map.s) / 2;
-  layoutMap();
-}
-function zoomAt(px, py, factor) {
-  var ns = Math.max(fitScale() * 0.5, Math.min(MAX_ZOOM, map.s * factor));
-  var k = ns / map.s;
-  map.tx = px - (px - map.tx) * k;
-  map.ty = py - (py - map.ty) * k;
-  map.s = ns;
-  layoutMap();
-}
-function drawMarks() {
-  var box = $('mapMarks');
-  box.textContent = '';
-  if (!map.w) return;
-  function mark(p, cls, text) {
-    var el = document.createElement('div');
-    el.className = 'mk ' + cls;
-    el.textContent = text;
-    el.style.left = (map.tx + p.x * map.s) + 'px';
-    el.style.top = (map.ty + p.y * map.s) + 'px';
-    box.appendChild(el);
+function loadView() {
+  var v = null;
+  try { v = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null'); } catch (e) {}
+  v = v || {};
+  if (typeof v.lat !== 'number' || typeof v.lon !== 'number' || typeof v.z !== 'number') {
+    v.lat = -33.8003; v.lon = 151.2979; v.z = 16;       // Shelly Beach, Manly
   }
-  map.refs.forEach(function (r, i) { mark(r, 'ref', String(i + 1)); });
-  if (map.pendingRef) mark(map.pendingRef, 'ref pending', '?');
-  if (map.pick) mark(map.pick, 'pick', '');
+  v.base = v.base === 'sat' ? 'sat' : 'topo';
+  v.off = v.off || {};
+  return v;
+}
+function saveView(v) {
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(v)); } catch (e) {}
+}
+function clearPick() {
+  pickSeq++;
+  if (pickMarker) { lmap.removeLayer(pickMarker); pickMarker = null; }
+}
+
+// Asks one of the services what is at a point. Resolves to the first result's
+// attributes, or null when there is nothing there or the service is down.
+function seedIdentify(url, layer, latlng) {
+  var b = lmap.getBounds(), size = lmap.getSize();
+  var q = url + '/identify?f=json&returnGeometry=false&tolerance=1&sr=4326&geometryType=esriGeometryPoint'
+        + '&geometry=' + latlng.lng + ',' + latlng.lat
+        + '&layers=all:' + layer
+        + '&mapExtent=' + [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',')
+        + '&imageDisplay=' + size.x + ',' + size.y + ',96';
+  return fetch(q).then(function (res) { return res.json(); })
+    .then(function (data) { return (data.results && data.results[0] && data.results[0].attributes) || null; })
+    .catch(function () { return null; });
 }
 
 (function () {
-  var view = $('mapView'), down = null;
-  function at(e) {
-    // The image is positioned inside the border, so measure from there too.
-    var r = view.getBoundingClientRect();
-    return { px: e.clientX - r.left - view.clientLeft, py: e.clientY - r.top - view.clientTop };
+  if (!window.L) {
+    $('mapView').hidden = true;
+    mapSay('The map could not be loaded (no internet, or the map library was blocked). Coordinates can still be typed in.', 'bad');
+    return;
   }
-  function imagePoint(p) {
-    var x = (p.px - map.tx) / map.s, y = (p.py - map.ty) / map.s;
-    return (x < 0 || y < 0 || x > map.w || y > map.h) ? null : { x: x, y: y };
-  }
-  view.addEventListener('pointerdown', function (e) {
-    if (e.button !== 0) return;
-    var p = at(e);
-    down = { px: p.px, py: p.py, tx: map.tx, ty: map.ty, moved: false };
-    view.setPointerCapture(e.pointerId);
-  });
-  view.addEventListener('pointermove', function (e) {
-    var p = at(e);
-    if (down) {
-      // A few pixels of wobble is still a click, not a drag.
-      if (!down.moved && Math.abs(p.px - down.px) + Math.abs(p.py - down.py) < 5) return;
-      down.moved = true;
-      view.classList.add('drag');
-      map.tx = down.tx + p.px - down.px;
-      map.ty = down.ty + p.py - down.py;
-      layoutMap();
-      return;
-    }
-    var ip = imagePoint(p);
-    if (ip && map.fit) {
-      var ll = pixelToLatLon(map.fit, ip.x, ip.y);
-      $('mapReadout').textContent = fmt(ll.lat, ll.lon);
-    } else {
-      $('mapReadout').textContent = '';
-    }
-  });
-  view.addEventListener('pointerup', function (e) {
-    var d = down;
-    down = null;
-    view.classList.remove('drag');
-    if (!d || d.moved) return;
-    var ip = imagePoint(at(e));
-    if (ip) mapClicked(ip);
-  });
-  view.addEventListener('pointercancel', function () { down = null; view.classList.remove('drag'); });
-  view.addEventListener('pointerleave', function () { if (!down) $('mapReadout').textContent = ''; });
-  view.addEventListener('wheel', function (e) {
-    e.preventDefault();
-    var p = at(e);
-    zoomAt(p.px, p.py, Math.exp(-e.deltaY * 0.0015));
-  }, { passive: false });
-  function zoomCentre(factor) { zoomAt(view.clientWidth / 2, view.clientHeight / 2, factor); }
-  $('zoomIn').addEventListener('click', function () { zoomCentre(1.5); });
-  $('zoomOut').addEventListener('click', function () { zoomCentre(1 / 1.5); });
-  $('zoomFit').addEventListener('click', fitView);
-})();
+  var view = loadView();
+  lmap = L.map('mapView', { zoomControl: true, attributionControl: true, maxZoom: 21, zoomSnap: 0.5 })
+          .setView([view.lat, view.lon], view.z);
+  lmap.attributionControl.setPrefix(false);
 
-// ── Reference points and picking ──
-function setMode(mode) {
-  if (mode === 'pick' && !map.fit) {
-    mode = 'ref';
-    mapSay('Add at least two reference points first, then you can pick waypoints.', 'bad');
+  // ── Base maps ──
+  var esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+  var bases = {
+    topo: L.tileLayer(esri + 'World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 19, maxZoom: 21, attribution: 'Map © Esri' }),
+    sat: L.tileLayer(esri + 'World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 19, maxZoom: 21, attribution: 'Imagery © Esri, Maxar' })
+  };
+  function setBase(name) {
+    Object.keys(bases).forEach(function (k) { if (lmap.hasLayer(bases[k])) lmap.removeLayer(bases[k]); });
+    bases[name].addTo(lmap);
+    view.base = name;
+    $('baseTopo').className = name === 'topo' ? 'on' : '';
+    $('baseSat').className = name === 'sat' ? 'on' : '';
+    saveView(view);
   }
-  map.mode = mode;
-  $('modePick').className = mode === 'pick' ? 'on' : '';
-  $('modeRef').className = mode === 'ref' ? 'on' : '';
-  if (mode === 'pick') cancelRef();
-}
-function cancelRef() {
-  map.pendingRef = null;
-  $('refEntry').hidden = true;
-  $('refCoords').value = '';
-  $('refParsed').textContent = '';
-  drawMarks();
-}
-function mapClicked(p) {
-  if (map.mode === 'pick' && map.fit) {
-    var ll = pixelToLatLon(map.fit, p.x, p.y);
-    map.pick = p;
-    drawMarks();
-    $('coords').value = ll.lat.toFixed(6) + ', ' + ll.lon.toFixed(6);
+  $('baseTopo').addEventListener('click', function () { setBase('topo'); });
+  $('baseSat').addEventListener('click', function () { setBase('sat'); });
+  setBase(view.base);
+
+  // ── SEED overlays ──
+  SEED_LAYERS.forEach(function (def, i) {
+    lmap.createPane('seed-' + def.key).style.zIndex = 250 + i;   // above tiles, below markers
+    lmap.getPane('seed-' + def.key).style.pointerEvents = 'none';
+    def.on = !view.off[def.key];
+    def.overlay = null;
+    def.seq = 0;
+    def.refresh = function () {
+      var mine = ++def.seq;
+      function drop() { if (def.overlay) { lmap.removeLayer(def.overlay); def.overlay = null; } }
+      if (!def.on || lmap.getZoom() < SEED_MIN_ZOOM) { drop(); return; }
+      var b = lmap.getBounds(), size = lmap.getSize();
+      var sw = L.CRS.EPSG3857.project(b.getSouthWest()), ne = L.CRS.EPSG3857.project(b.getNorthEast());
+      var dpr = Math.min(2, window.devicePixelRatio || 1);
+      var src = def.url + '/export?f=image&format=png32&transparent=true&bboxSR=3857&imageSR=3857'
+              + '&bbox=' + [sw.x, sw.y, ne.x, ne.y].join(',')
+              + '&size=' + Math.round(size.x * dpr) + ',' + Math.round(size.y * dpr)
+              + '&dpi=' + Math.round(96 * dpr)
+              + '&layers=show:' + def.layers;
+      // Load off-screen first, so the old image stays up until the new one is
+      // ready and a slow answer for a view already left is thrown away.
+      var img = new Image();
+      img.onload = function () {
+        if (mine !== def.seq) return;
+        var next = L.imageOverlay(src, b, { opacity: def.opacity, pane: 'seed-' + def.key, interactive: false }).addTo(lmap);
+        drop();
+        def.overlay = next;
+      };
+      img.onerror = function () {
+        if (mine === def.seq) mapSay('SEED did not return the "' + def.label + '" layer. The base map still works; try moving the map to reload it.', 'bad');
+      };
+      img.src = src;
+    };
+
+    var lab = document.createElement('label'); lab.className = 'check';
+    var box = document.createElement('input'); box.type = 'checkbox'; box.checked = def.on;
+    box.addEventListener('change', function () {
+      def.on = box.checked;
+      view.off[def.key] = !def.on;
+      saveView(view);
+      def.refresh();
+    });
+    lab.appendChild(box); lab.appendChild(document.createTextNode(def.label));
+    $('layerToggles').appendChild(lab);
+  });
+  function refreshAll() {
+    SEED_LAYERS.forEach(function (def) { def.refresh(); });
+    if (lmap.getZoom() < SEED_MIN_ZOOM) mapSay('Zoom in to see the SEED seabed layers.', '');
+    else if ($('mapStatus').textContent.indexOf('Zoom in') === 0) mapSay('', '');
+  }
+  lmap.on('moveend', function () {
+    var c = lmap.getCenter();
+    view.lat = c.lat; view.lon = c.lng; view.z = lmap.getZoom();
+    saveView(view);
+    refreshAll();
+  });
+  lmap.attributionControl.addAttribution('Seabed data © State of NSW (DCCEEW), via SEED');
+  refreshAll();
+
+  // ── Reading and picking coordinates ──
+  lmap.on('mousemove', function (e) { $('mapReadout').textContent = fmt(e.latlng.lat, e.latlng.lng); });
+  lmap.on('mouseout', function () { $('mapReadout').textContent = ''; });
+  lmap.on('click', function (e) {
+    var ll = e.latlng.wrap();
+    clearPick();
+    var mine = pickSeq;
+    pickMarker = L.circleMarker(ll, { radius: 7, color: '#001018', weight: 2, fillColor: '#ff6b35', fillOpacity: 1, interactive: false }).addTo(lmap);
+    $('coords').value = ll.lat.toFixed(6) + ', ' + ll.lng.toFixed(6);
     showParsed();
     $('name').focus({ preventScroll: true });
-    mapSay('Picked ' + fmt(ll.lat, ll.lon) + ' — name it under New waypoint and send.', 'ok');
-    return;
-  }
-  map.pendingRef = p;
-  $('refEntry').hidden = false;
-  drawMarks();
-  $('refCoords').focus();
-  mapSay('', '');
-}
-function showRefParsed() {
-  var el = $('refParsed'), p = parseCoords($('refCoords').value);
-  el.className = p.error !== undefined ? 'bad' : '';
-  el.textContent = p.error !== undefined ? p.error : fmt(p.lat, p.lon) + (p.note ? '  (' + p.note + ')' : '');
-  return p;
-}
-function addRef() {
-  if (!map.pendingRef) return;
-  var p = showRefParsed();
-  if (p.error !== undefined) { if (!p.error) $('refParsed').textContent = 'Enter the coordinates of that spot.'; $('refParsed').className = 'bad'; return; }
-  map.refs.push({ x: map.pendingRef.x, y: map.pendingRef.y, lat: p.lat, lon: p.lon });
-  cancelRef();
-  refit(true);
-  saveMap();
-}
-
-// Recomputes the fit and everything that describes it. `fresh` is true when
-// the reference points have just changed, so the mode can follow.
-function refit(fresh) {
-  var fit = solveFit(map.refs);
-  map.fit = (fit && !fit.mirrored) ? fit : null;
-  map.pick = null;
-  var n = map.refs.length;
-  if (fit && fit.mirrored) {
-    mapSay('These reference points only fit a mirrored map — one of them is on the wrong spot or has the wrong coordinates.', 'bad');
-  } else if (!map.fit) {
-    mapSay(n === 0 ? 'Click a spot on the map whose real coordinates you know.'
-         : n === 1 ? 'One reference point set. Click a second spot, as far from the first as you can.'
-         : 'Those reference points are on the same spot — remove one and mark another.', n > 1 ? 'bad' : '');
-  } else {
-    var worst = Math.max.apply(null, map.fit.errors);
-    var size = 'the map is about ' + Math.round(map.w * map.fit.mPerPx) + ' × ' + Math.round(map.h * map.fit.mPerPx) + ' m';
-    var up = Math.round(map.fit.upBearing) % 360;
-    var facing = up === 0 ? 'north is up' : 'the top points to ' + up + '°';
-    if (n === 2) {
-      mapSay('Ready: ' + size + ', ' + facing + '. Two points cannot show an error — add a third to check the fit.', 'ok');
-    } else if (worst > FIT_WARN_M) {
-      mapSay('Reference points disagree by up to ' + fmtM(worst) + ' (' + size + '). Check the one with the largest error below.', 'bad');
-    } else {
-      mapSay('Ready: ' + size + ', ' + facing + ', reference points agree within ' + fmtM(worst) + '.', 'ok');
-    }
-  }
-  if (fresh || !map.fit) setModeQuiet(map.fit ? 'pick' : 'ref');
-  renderRefs();
-  drawMarks();
-}
-// setMode without its "add two points first" message, which would overwrite
-// the more specific one refit() has just shown.
-function setModeQuiet(mode) {
-  var msg = $('mapStatus').textContent, cls = $('mapStatus').className;
-  setMode(mode);
-  mapSay(msg, cls);
-}
-function renderRefs() {
-  var box = $('refList');
-  box.textContent = '';
-  map.refs.forEach(function (r, i) {
-    var row = document.createElement('div'); row.className = 'wp';
-    var left = document.createElement('div');
-    var nm = document.createElement('div'); nm.className = 'nm';
-    nm.textContent = 'Reference ' + (i + 1) + '  ·  ' + fmt(r.lat, r.lon);
-    left.appendChild(nm);
-    if (map.fit && map.refs.length > 2) {
-      var sub = document.createElement('div');
-      sub.className = 'sub err' + (map.fit.errors[i] > FIT_WARN_M ? ' bad' : '');
-      sub.textContent = 'off by ' + fmtM(map.fit.errors[i]);
-      left.appendChild(sub);
-    }
-    var del = document.createElement('button'); del.className = 'quiet'; del.textContent = 'REMOVE';
-    del.addEventListener('click', function () {
-      map.refs.splice(i, 1);
-      refit(true);
-      saveMap();
+    var picked = 'Picked ' + fmt(ll.lat, ll.lng);
+    mapSay(picked + ' — name it under New waypoint and send.', 'ok');
+    // What SEED knows about that spot: surveyed depth and the landform class.
+    Promise.all([seedIdentify(LIDAR, 2, ll), seedIdentify(LANDFORMS, 0, ll)]).then(function (res) {
+      if (mine !== pickSeq) return;
+      var bits = [];
+      var depth = res[0] ? parseFloat(res[0]['Pixel Value']) : NaN;
+      if (isFinite(depth)) bits.push('depth about ' + Math.abs(depth).toFixed(1) + ' m (2018 survey)');
+      if (res[1] && res[1].LANDFORM) bits.push('landform: ' + String(res[1].LANDFORM).toLowerCase());
+      if (bits.length) mapSay(picked + ' · ' + bits.join(' · ') + ' — name it under New waypoint and send.', 'ok');
     });
-    row.appendChild(left); row.appendChild(del);
-    box.appendChild(row);
   });
-}
-$('modePick').addEventListener('click', function () { setMode('pick'); });
-$('modeRef').addEventListener('click', function () { setMode('ref'); });
-$('refCoords').addEventListener('input', showRefParsed);
-$('refCoords').addEventListener('keydown', function (e) { if (e.key === 'Enter') addRef(); });
-$('refAdd').addEventListener('click', addRef);
-$('refCancel').addEventListener('click', cancelRef);
 
-// ── Loading and keeping the map ──
-// Its own database: this page shares an origin with the app, whose 'divenav'
-// database must not be touched from here.
-var MAP_DB = 'divenav_pcmap';
-function mapStore(mode, fn) {
-  try {
-    var req = indexedDB.open(MAP_DB, 1);
-    req.onupgradeneeded = function () { req.result.createObjectStore('map'); };
-    req.onsuccess = function () {
-      try { fn(req.result.transaction('map', mode).objectStore('map')); } catch (e) {}
-    };
-  } catch (e) {}
-}
-function saveMap() {
-  mapStore('readwrite', function (store) {
-    if (!map.blob) { store.delete('current'); return; }
-    store.put({ blob: map.blob, name: map.name, w: map.w, h: map.h, refs: map.refs }, 'current');
-  });
-}
+  // ── Legend for the landform colours ──
+  fetch(LANDFORMS + '/legend?f=json').then(function (res) { return res.json(); }).then(function (data) {
+    var layer = (data.layers || []).filter(function (l) { return l.layerId === 0; })[0];
+    if (!layer) return;
+    layer.legend.forEach(function (item) {
+      if (!/^image\/(png|gif|jpeg)$/.test(item.contentType) || !/^[A-Za-z0-9+\/=]+$/.test(item.imageData)) return;
+      var s = document.createElement('span');
+      var im = document.createElement('img');
+      im.alt = '';
+      im.src = 'data:' + item.contentType + ';base64,' + item.imageData;
+      s.appendChild(im); s.appendChild(document.createTextNode(item.label));
+      $('legend').appendChild(s);
+    });
+  }).catch(function () {});
 
-// An Illustrator SVG exported as "responsive" has a viewBox but no size, and
-// a browser then has no pixel grid to click on. Give it one.
-function sizedSvg(text) {
-  var doc = new DOMParser().parseFromString(text, 'image/svg+xml');
-  var svg = doc.documentElement;
-  if (!svg || svg.nodeName !== 'svg' || doc.querySelector('parsererror')) throw new Error('that SVG could not be read');
-  function px(attr) { var v = svg.getAttribute(attr) || ''; return /%/.test(v) ? NaN : parseFloat(v); }
-  var w = px('width'), h = px('height');
-  if (!(w > 0 && h > 0)) {
-    var vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-    if (vb.length !== 4 || !(vb[2] > 0 && vb[3] > 0)) throw new Error('that SVG has no size');
-    w = vb[2]; h = vb[3];
-  }
-  svg.setAttribute('width', w); svg.setAttribute('height', h);
-  return new Blob([new XMLSerializer().serializeToString(doc)], { type: 'image/svg+xml' });
-}
-
-// `saved` is the stored record when restoring; absent for a freshly chosen file.
-function openMap(blob, name, saved) {
-  var url = URL.createObjectURL(blob);
-  var probe = new Image();
-  probe.onerror = function () {
-    URL.revokeObjectURL(url);
-    if (!saved) mapSayLoad('That file could not be shown as an image. Export the map as PNG or SVG.');
-  };
-  probe.onload = function () {
-    var w = probe.naturalWidth, h = probe.naturalHeight;
-    if (!(w > 0 && h > 0)) { probe.onerror(); return; }
-    // Re-exporting the same artboard keeps the reference points; any other
-    // image would put them on the wrong spots.
-    var keep = !saved && map.refs.length && map.w === w && map.h === h;
-    if (map.url) URL.revokeObjectURL(map.url);
-    map.refs = saved ? (saved.refs || []) : keep ? map.refs : [];
-    map.blob = blob; map.url = url; map.name = name; map.w = w; map.h = h;
-    map.pendingRef = null; map.pick = null;
-    $('mapImg').src = url;
-    $('mapUi').hidden = false;
-    $('mapRemove').hidden = false;
-    $('refEntry').hidden = true;
-    fitView();
-    refit(true);
-    if (keep) mapSay($('mapStatus').textContent + ' Reference points kept from the previous image of the same size.', $('mapStatus').className);
-    if (!saved) saveMap();
-  };
-  probe.src = url;
-}
-function mapSayLoad(msg) { $('mapErr').textContent = msg; }
-function chooseFile(file) {
-  if (!file) return;
-  mapSayLoad('');
-  var isSvg = /svg/.test(file.type) || /\.svg$/i.test(file.name);
-  if (!isSvg && !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
-    mapSayLoad('Illustrator (.ai) and PDF files cannot be shown here. Export the map as PNG or SVG first.');
-    return;
-  }
-  var ready = isSvg ? file.text().then(sizedSvg) : Promise.resolve(file);
-  ready.then(function (blob) { openMap(blob, file.name, null); })
-       .catch(function (err) { mapSayLoad('Could not open the map: ' + err.message + '.'); });
-}
-$('mapChoose').addEventListener('click', function () { $('mapFile').click(); });
-$('mapFile').addEventListener('change', function () { chooseFile(this.files[0]); this.value = ''; });
-$('mapRemove').addEventListener('click', function () {
-  if (map.url) URL.revokeObjectURL(map.url);
-  map.blob = null; map.url = ''; map.w = 0; map.h = 0; map.refs = []; map.fit = null;
-  map.pick = null; map.pendingRef = null;
-  $('mapImg').removeAttribute('src');
-  $('mapUi').hidden = true;
-  $('mapRemove').hidden = true;
-  saveMap();
-});
-window.addEventListener('resize', function () { if (map.w) layoutMap(); });
-mapStore('readonly', function (store) {
-  var req = store.get('current');
-  req.onsuccess = function () {
-    if (req.result && req.result.blob) openMap(req.result.blob, req.result.name || '', req.result);
-  };
-});
+  // The Illustrator-map picker this replaced kept an image in its own database.
+  try { indexedDB.deleteDatabase('divenav_pcmap'); } catch (e) {}
+})();
 
 // ── Connection settings ─────────────────────────────────────────────
 (function () {
