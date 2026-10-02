@@ -683,6 +683,10 @@ footer#loggerFooter {
     </div>
     <div id="entryResults" style="display:flex;flex-direction:column;gap:0;max-height:46vh;overflow-y:auto;border-radius:8px;"></div>
     <div id="entrySelected" style="display:none;font-size:13px;color:var(--accent2);font-family:'Share Tech Mono',monospace;line-height:1.5;padding:8px 10px;background:rgba(0,255,157,0.07);border:1px solid rgba(0,255,157,0.3);border-radius:8px;"></div>
+    <div class="field-group">
+      <div class="field-label">SEED seabed layers on the map</div>
+      <div id="seedToggles" style="display:flex;flex-wrap:wrap;gap:10px 18px;"></div>
+    </div>
     <div class="modal-btns" style="flex-wrap:wrap;">
       <button class="modal-btn cancel" id="entryCancelBtn">CANCEL</button>
       <button class="modal-btn cancel" id="entrySkipBtn">NO LOOP</button>
@@ -1871,11 +1875,36 @@ function lat2px(lat, z) {
 // opacities - the same stack send.html shows.
 var SEED_MARINE = 'https://mapprod2.environment.nsw.gov.au/arcgis/rest/services/Coastal_Marine/';
 var MAP_OVERLAYS = [
-  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:2',     opacity: 0.7 },  // depth
-  { url: SEED_MARINE + 'SeabedLandforms/MapServer',                       layers: 'show:0,1,2', opacity: 0.6 },  // landforms
-  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:1',     opacity: 0.45 }, // slope
-  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:0',     opacity: 1 }     // 5 m contours
+  { key: 'dem',       label: 'Depth',        url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:2',     opacity: 0.7 },
+  { key: 'landforms', label: 'Landforms',    url: SEED_MARINE + 'SeabedLandforms/MapServer',                       layers: 'show:0,1,2', opacity: 0.6 },
+  { key: 'slope',     label: 'Slope',        url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:1',     opacity: 0.45 },
+  { key: 'isobaths',  label: '5 m contours', url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:0',     opacity: 1 }
 ];
+// Which of them to draw is chosen with the tick-boxes in the SAVE MAP dialog
+// and remembered. Stored as the layers switched OFF, so a layer added here
+// later starts switched on.
+var SEED_OFF_KEY = 'divenav_seedoff';
+function seedOff() {
+  try { return JSON.parse(localStorage.getItem(SEED_OFF_KEY) || 'null') || {}; }
+  catch (e) { return {}; }
+}
+(function () {
+  var box = document.getElementById('seedToggles'), off = seedOff();
+  MAP_OVERLAYS.forEach(function (lyr) {
+    var lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:16px;color:var(--text);';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !off[lyr.key];
+    cb.style.cssText = 'width:22px;height:22px;flex-shrink:0;';
+    cb.addEventListener('change', function () {
+      var now = seedOff();
+      now[lyr.key] = !cb.checked;
+      try { localStorage.setItem(SEED_OFF_KEY, JSON.stringify(now)); } catch (e) {}
+    });
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(lyr.label));
+    box.appendChild(lab);
+  });
+})();
 // A slow SEED server must not hold the map up: an overlay that has not
 // arrived by then is left out.
 var OVERLAY_WAIT_MS = 12000;
@@ -2152,7 +2181,8 @@ function renderMapImage(entry) {
   // or if they fail to load). One /export image per overlay, drawn to the plot.
   var bbox3857 = [lon2merc(minLon), lat2merc(minLat), lon2merc(maxLon), lat2merc(maxLat)];
   var ovW = Math.min(Math.round(nativeW), 2048), ovH = Math.min(Math.round(nativeH), 2048);
-  var ovList = window._mapOverlaysOff ? [] : MAP_OVERLAYS;
+  var ovOff = seedOff();
+  var ovList = window._mapOverlaysOff ? [] : MAP_OVERLAYS.filter(function (lyr) { return !ovOff[lyr.key]; });
   var ovJobs = ovList.map(function (lyr) {
     return new Promise(function (resolve) {
       var img = new Image();
@@ -2323,7 +2353,8 @@ function renderMapImage(entry) {
     var targetM = 170 * mpp, stepM = niceSteps[niceSteps.length - 1];
     for (var s = 0; s < niceSteps.length; s++) { if (niceSteps[s] >= targetM) { stepM = niceSteps[s]; break; } }
     var stepPx = stepM / mpp;
-    var sbx = boxLeft + 16, sby = boxTop + plotH - 22;
+    // Sits one row above the attribution, which is long enough to reach it.
+    var sbx = boxLeft + 16, sby = boxTop + plotH - 58;
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(sbx, sby); ctx.lineTo(sbx + stepPx, sby); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(sbx, sby - 7); ctx.lineTo(sbx, sby + 7); ctx.stroke();
