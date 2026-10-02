@@ -656,7 +656,7 @@ footer#loggerFooter {
 <div id="instrModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.80);display:flex;align-items:center;justify-content:center;z-index:300;padding:20px;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px 20px;width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;">
     <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:3px;color:var(--accent);text-align:center;">INSTRUCTIONS</div>
-    <div style="font-size:18px;color:var(--text);line-height:1.8;">Name your waypoints and enter coords (by SET HERE and COORDS)</div>
+    <div style="font-size:18px;color:var(--text);line-height:1.8;">Name your waypoints and enter coords (by SET HERE and COORDS), or send them from a PC at <span style="color:var(--accent2);">app.viz.net.au/Navigation/send.html</span> &mdash; they arrive when the app is next opened with internet.</div>
     <div style="font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-top:4px;">At the dive site:</div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">1.</span> Wait for the banner to read <span style="color:var(--accent2);">● LIVE</span> with a good accuracy (±15m or better) — this means GPS has a genuine fresh fix.</div>
     <div style="font-size:18px;color:var(--text);line-height:1.8;"><span style="color:var(--accent);">2.</span> SET:</div>
@@ -712,6 +712,8 @@ footer#loggerFooter {
       <input class="field-input" id="libSearch" type="text" inputmode="search" placeholder="filter by name…" autocomplete="off" autocorrect="off" spellcheck="false">
     </div>
     <div id="libList" style="display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow-y:auto;"></div>
+    <button class="modal-btn confirm" id="libInboxBtn" style="flex:none;">📥 GET WAYPOINTS FROM PC</button>
+    <div class="modal-error" id="libInboxMsg" style="color:var(--muted);"></div>
     <div class="modal-btns">
       <button class="modal-btn cancel" id="libCloseBtn">CLOSE</button>
       <button class="modal-btn confirm" id="libAddBtn" disabled style="opacity:0.4;">ADD TO PLAN</button>
@@ -1664,6 +1666,7 @@ var libDelArm = null; // id armed for delete confirm
 function openLibrary() {
   libSel = {}; libDelArm = null;
   document.getElementById('libSearch').value = '';
+  document.getElementById('libInboxMsg').textContent = '';
   renderLibrary();
   document.getElementById('libraryModal').classList.remove('hidden');
 }
@@ -3574,6 +3577,140 @@ document.getElementById('cfgSave').addEventListener('click', function() {
 // Anything left over from a previous dive (upload failed, app closed) goes
 // out as soon as the app is opened again.
 setTimeout(function() { retrySend('startup'); }, 4000);
+
+// ====================================================================
+//  WAYPOINT INBOX
+//  Waypoints sent from the PC (send.html) wait on the auto-send endpoint,
+//  under /waypoints, with the same shared secret. They are collected at
+//  startup, when the phone comes back online, when the app returns to the
+//  foreground and from the button in the library - but never during a dive:
+//  the plan must not change under a diver.
+//  The endpoint only forgets a waypoint once this app has saved it and said
+//  so, and the ids already taken are remembered here, so a lost confirmation
+//  can neither drop a waypoint nor deliver it twice.
+// ====================================================================
+var INBOX_SEEN_KEY = 'divenav_inboxseen';
+var INBOX_MIN_GAP_MS = 60000;   // between automatic checks
+var _inboxBusy = false, _inboxLast = 0;
+
+function inboxUrl() {
+  var url = sendCfg().url || '';
+  if (url.indexOf('https://') !== 0) return '';
+  try { return new URL('/waypoints', url).href; } catch (e) { return ''; }
+}
+function inboxSeen() {
+  try { return JSON.parse(localStorage.getItem(INBOX_SEEN_KEY) || '[]') || []; }
+  catch (e) { return []; }
+}
+function markInboxSeen(ids) {
+  var list = inboxSeen().concat(ids);
+  if (list.length > 300) list = list.slice(list.length - 300);
+  try { localStorage.setItem(INBOX_SEEN_KEY, JSON.stringify(list)); } catch (e) {}
+}
+// render() writes names into the cards as HTML, so a name that arrives from
+// outside the app is stripped of markup characters first.
+function cleanInboxName(name) {
+  return String(name === null || name === undefined ? '' : name)
+    .replace(/[<>&"'`\\\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+// Adds what the endpoint returned to the library (and to the plan, unless
+// the PC asked for library only). Returns every id seen, for confirmation.
+function importInbox(list) {
+  var seen = {}, inLib = {}, onPlan = {};
+  inboxSeen().forEach(function(id) { seen[id] = true; });
+  lib.forEach(function(e) { if (e && e.id) inLib[e.id] = true; });
+  wps.forEach(function(w) { if (w.id) onPlan[w.id] = true; });
+  var ids = [], fresh = [], added = 0, planned = 0, now = Date.now();
+  list.forEach(function(w) {
+    if (!w || typeof w.id !== 'string') return;
+    ids.push(w.id);
+    if (seen[w.id]) return;
+    fresh.push(w.id);
+    var name = cleanInboxName(w.name);
+    if (!name || typeof w.lat !== 'number' || typeof w.lon !== 'number' ||
+        !isFinite(w.lat) || !isFinite(w.lon) ||
+        w.lat < -90 || w.lat > 90 || w.lon < -180 || w.lon > 180) return;
+    if (!inLib[w.id]) {
+      lib.push({ id: w.id, name: name, lat: w.lat, lon: w.lon, created: now, updated: now });
+      inLib[w.id] = true;
+    }
+    if (w.plan !== false && !onPlan[w.id]) {
+      wps.push({ id: w.id, name: name, lat: w.lat, lon: w.lon });
+      onPlan[w.id] = true;
+      planned++;
+    }
+    added++;
+  });
+  if (added) {
+    saveLibrary();
+    if (planned) { saveWPs(); render(); }
+    if (!document.getElementById('libraryModal').classList.contains('hidden')) renderLibrary();
+  }
+  if (fresh.length) markInboxSeen(fresh);
+  return { ids: ids, added: added, planned: planned };
+}
+
+function checkInbox(manual) {
+  function say(msg, cls) {
+    log(msg, cls);
+    if (manual) document.getElementById('libInboxMsg').textContent = msg;
+  }
+  var url = inboxUrl();
+  if (!url) {
+    if (manual) say('Set the endpoint and secret under EMAIL first', 'lerr');
+    return;
+  }
+  if (!manual && (diveLocked || loggerActive)) return;
+  if (_inboxBusy || !_storeReady) return;
+  if (!manual && Date.now() - _inboxLast < INBOX_MIN_GAP_MS) return;
+  _inboxBusy = true; _inboxLast = Date.now();
+  if (manual) document.getElementById('libInboxMsg').textContent = 'Checking…';
+  var headers = {};
+  var token = sendCfg().token;
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  fetch(url, { headers: headers, mode: 'cors', cache: 'no-store' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      _inboxBusy = false;
+      // A dive may have started while the request was in flight. Leave the
+      // waypoints on the endpoint; they will still be there afterwards.
+      if (!manual && (diveLocked || loggerActive)) return;
+      var got = importInbox((data && data.waypoints) || []);
+      if (got.added) {
+        say(got.added + ' waypoint' + (got.added > 1 ? 's' : '') + ' received from PC - '
+            + (got.planned ? got.planned + ' added to the plan' : 'saved in the library'), 'lok');
+      } else if (manual) {
+        say('No new waypoints waiting', 'linf');
+      }
+      if (!got.ids.length) return;
+      headers['Content-Type'] = 'application/json';
+      // If this confirmation is lost the ids stay remembered, so the next
+      // check skips them and confirms again.
+      fetch(url, { method: 'DELETE', headers: headers, mode: 'cors', body: JSON.stringify({ ids: got.ids }) })
+        .catch(function() {});
+    })
+    .catch(function(err) {
+      _inboxBusy = false;
+      // No signal at a dive site is normal - only a tap gets told about it.
+      if (manual) say('Could not check for waypoints (' + (err.message || 'network error') + ')', 'lerr');
+    });
+}
+
+document.getElementById('libInboxBtn').addEventListener('click', function() { checkInbox(true); });
+window.addEventListener('online', function() { checkInbox(false); });
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') checkInbox(false);
+});
+// Wait for the stored plan and library to load first: collecting before then
+// would have the saved plan overwrite the waypoints just added to it.
+(function startupInbox() {
+  if (!_storeReady) { setTimeout(startupInbox, 1500); return; }
+  checkInbox(false);
+})();
 
 </script>
 <div id="delLogModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.80);align-items:center;justify-content:center;z-index:300;padding:20px;">
