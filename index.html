@@ -693,9 +693,9 @@ footer#loggerFooter {
 
 <!-- ── Map preview (review the rendered image before sending) ── -->
 <div id="mapPreviewModal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:320;padding:14px;">
-  <div style="font-family:'Share Tech Mono',monospace;color:var(--accent,#00d4ff);letter-spacing:2px;font-size:13px;margin-bottom:10px;">MAP PREVIEW — REVIEW BEFORE SENDING</div>
-  <div style="flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;overflow:auto;">
-    <img id="mapPreviewImg" alt="map preview" style="max-width:100%;max-height:72vh;border:1px solid rgba(0,212,255,0.4);border-radius:8px;box-shadow:0 6px 30px rgba(0,0,0,0.6);">
+  <div style="font-family:'Share Tech Mono',monospace;color:var(--accent,#00d4ff);letter-spacing:2px;font-size:13px;margin-bottom:10px;text-align:center;">MAP PREVIEW — PINCH OR DOUBLE-TAP TO ZOOM</div>
+  <div id="mapPreviewView" style="position:relative;flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;overflow:hidden;touch-action:none;">
+    <img id="mapPreviewImg" alt="map preview" draggable="false" style="max-width:100%;max-height:72vh;border:1px solid rgba(0,212,255,0.4);border-radius:8px;box-shadow:0 6px 30px rgba(0,0,0,0.6);transform-origin:0 0;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;">
   </div>
   <div style="display:flex;gap:12px;margin-top:14px;width:100%;max-width:460px;">
     <button id="mapPreviewClose" class="modal-btn cancel" style="flex:1;">✕ CLOSE</button>
@@ -2205,7 +2205,7 @@ function renderMapImage(entry) {
     // Header
     ctx.fillStyle = '#00d4ff'; ctx.font = 'bold 52px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('DIVENAV — DIVE MAP', PAD, 66);
-    ctx.fillStyle = '#7d96a6'; ctx.font = '28px ' + MONO;
+    ctx.fillStyle = '#ffffff'; ctx.font = '28px ' + MONO;
     ctx.fillText(subStr, PAD, 110);
 
     // Clip overlays to the plot rectangle
@@ -2277,7 +2277,7 @@ function renderMapImage(entry) {
       var widest = wName >= wCoord;
       var ps = pickSide(cx, (widest ? 'bold 36px ' : '24px ') + MONO, widest ? p.name : coordStr);
       chip(p.name, ps.x, cy - 6, 'bold 36px ' + MONO, col, ps.right);
-      chip(coordStr, ps.x, cy + 27, '24px ' + MONO, '#dfeefa', ps.right);
+      chip(coordStr, ps.x, cy + 27, '24px ' + MONO, '#ffffff', ps.right);
     });
 
     ctx.restore(); // end plot clip
@@ -2316,7 +2316,7 @@ function renderMapImage(entry) {
     var listTop = boxTop + plotH + PAD + 20;
     ctx.strokeStyle = 'rgba(0,212,255,0.2)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(PAD, listTop - 32); ctx.lineTo(canvasW - PAD, listTop - 32); ctx.stroke();
-    ctx.fillStyle = '#7d96a6'; ctx.font = '26px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#ffffff'; ctx.font = '26px ' + MONO; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     ctx.fillText('SEQUENCE', PAD, listTop);
     ctx.textAlign = 'right'; ctx.fillText('DISTANCE', coordX, listTop);
     var row = 0;
@@ -2325,9 +2325,9 @@ function renderMapImage(entry) {
       var ey2 = _rowY(); row++;
       ctx.fillStyle = '#ffd34d'; ctx.beginPath();
       ctx.moveTo(PAD + 12, ey2 - 23); ctx.lineTo(PAD + 24, ey2 - 11); ctx.lineTo(PAD + 12, ey2 + 1); ctx.lineTo(PAD, ey2 - 11); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
       ctx.fillText('> ' + entry.name + ' (' + label + ')', nameColX, ey2);
-      ctx.fillStyle = '#c8dce8'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillStyle = '#ffffff'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
       ctx.fillText(dist, coordX, ey2);
     }
     if (entry) _entryRow('entry', 'START');
@@ -2335,9 +2335,9 @@ function renderMapImage(entry) {
       var ry = _rowY(); row++;
       var col = DOT_COL[p.idx % DOT_COL.length];
       ctx.fillStyle = col; ctx.beginPath(); ctx.arc(PAD + 12, ry - 11, 11, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#c8dce8'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 32px ' + MONO; ctx.textAlign = 'left';
       ctx.fillText((k + 1) + '. ' + p.name, nameColX, ry);
-      ctx.fillStyle = '#c8dce8'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
+      ctx.fillStyle = '#ffffff'; ctx.font = '32px ' + MONO; ctx.textAlign = 'right';
       ctx.fillText(legs[k], coordX, ry);
     });
     if (entry) _entryRow('exit', exitLeg);
@@ -2375,7 +2375,94 @@ function previewMap(cv, fname, loaded) {
   }
   _pendingSave = { cv: cv, fname: fname, loaded: loaded };
   document.getElementById('mapPreviewModal').classList.remove('hidden');
+  previewZoomReset();
 }
+
+// ── Zooming the map preview ──
+// The page itself cannot be pinch-zoomed (the viewport is locked so the nav
+// screen never moves under a glove), so the preview does its own: pinch,
+// double-tap, drag to move, and the wheel on a PC. The image is the full
+// 1260px render shown small, so zooming in reveals real detail.
+var PREVIEW_MAX_ZOOM = 8;
+var _pz = { s: 1, x: 0, y: 0 };
+function previewZoomApply() {
+  var view = document.getElementById('mapPreviewView');
+  var img = document.getElementById('mapPreviewImg');
+  // Keep the image filling the view: centred while it is smaller than the
+  // view, and never dragged so far that an edge comes inside it.
+  function clamp(pos, size, viewSize, offset) {
+    var scaled = size * _pz.s;
+    if (scaled <= viewSize) return (viewSize - scaled) / 2 - offset;
+    return Math.min(-offset, Math.max(viewSize - scaled - offset, pos));
+  }
+  if (_pz.s <= 1) { _pz.s = 1; _pz.x = 0; _pz.y = 0; }
+  else {
+    _pz.x = clamp(_pz.x, img.offsetWidth, view.clientWidth, img.offsetLeft);
+    _pz.y = clamp(_pz.y, img.offsetHeight, view.clientHeight, img.offsetTop);
+  }
+  img.style.transform = 'translate(' + _pz.x + 'px,' + _pz.y + 'px) scale(' + _pz.s + ')';
+}
+function previewZoomReset() { _pz.s = 1; previewZoomApply(); }
+// Zoom by `factor`, keeping the point under (clientX, clientY) where it is.
+function previewZoomAt(clientX, clientY, factor) {
+  var img = document.getElementById('mapPreviewImg');
+  var r = img.getBoundingClientRect();
+  var ns = Math.max(1, Math.min(PREVIEW_MAX_ZOOM, _pz.s * factor));
+  var k = ns / _pz.s;
+  var px = clientX - (r.left - _pz.x), py = clientY - (r.top - _pz.y);
+  _pz.x = px - (px - _pz.x) * k;
+  _pz.y = py - (py - _pz.y) * k;
+  _pz.s = ns;
+  previewZoomApply();
+}
+(function () {
+  var view = document.getElementById('mapPreviewView');
+  var pts = {}, lastTap = null;
+  function list() { return Object.keys(pts).map(function (k) { return pts[k]; }); }
+  view.addEventListener('pointerdown', function (e) {
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: Date.now() };
+    try { view.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  view.addEventListener('pointermove', function (e) {
+    var p = pts[e.pointerId];
+    if (!p) return;
+    var all = list();
+    if (all.length === 1) {
+      _pz.x += e.clientX - p.x; _pz.y += e.clientY - p.y;
+      p.x = e.clientX; p.y = e.clientY;
+      previewZoomApply();
+    } else if (all.length === 2) {
+      var o = all[0] === p ? all[1] : all[0];
+      var before = Math.hypot(p.x - o.x, p.y - o.y);
+      var after = Math.hypot(e.clientX - o.x, e.clientY - o.y);
+      // The fingers' midpoint moving is a pan; their spread changing is a zoom.
+      _pz.x += (e.clientX - p.x) / 2; _pz.y += (e.clientY - p.y) / 2;
+      p.x = e.clientX; p.y = e.clientY;
+      if (before > 0) previewZoomAt((p.x + o.x) / 2, (p.y + o.y) / 2, after / before);
+      else previewZoomApply();
+    }
+  });
+  function up(e) {
+    var p = pts[e.pointerId];
+    delete pts[e.pointerId];
+    if (!p || e.type === 'pointercancel' || list().length) return;
+    var now = Date.now();
+    var isTap = now - p.t < 300 && Math.abs(e.clientX - p.x0) + Math.abs(e.clientY - p.y0) < 12;
+    if (!isTap) { lastTap = null; return; }
+    if (lastTap && now - lastTap.t < 350 && Math.abs(e.clientX - lastTap.x) + Math.abs(e.clientY - lastTap.y) < 40) {
+      lastTap = null;
+      if (_pz.s > 1) previewZoomReset(); else previewZoomAt(e.clientX, e.clientY, 3);
+    } else {
+      lastTap = { t: now, x: e.clientX, y: e.clientY };
+    }
+  }
+  view.addEventListener('pointerup', up);
+  view.addEventListener('pointercancel', up);
+  view.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    previewZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+  }, { passive: false });
+})();
 
 function saveCanvasToDevice(cv, fname, loaded) {
   var done = function (blob) {
