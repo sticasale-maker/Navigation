@@ -1862,13 +1862,23 @@ function lat2px(lat, z) {
 // the plot's Web-Mercator bbox, then composited over the basemap. To use the
 // SEED layers from a "show on map" deep-link, resolve each portalItem to its
 // MapServer REST URL (open the SEED dataset → "ArcGIS REST Service" resource)
-// and add: { url:'…/MapServer', layers:'show:0,1,2' }.
-// IMPORTANT: NSW gov servers may not send CORS headers. If a layer can't be
-// drawn without tainting the canvas, it is skipped automatically and the
-// basemap export still succeeds (see previewMap's taint guard).
+// and add: { url:'…/MapServer', layers:'show:0,1,2', opacity:0.6 }.
+// If a server stops sending CORS headers its layer taints the canvas; the
+// map is then rebuilt without overlays (see previewMap's taint guard).
+//
+// These are the layers behind the SEED "show on map" link for the 2018 marine
+// LiDAR survey and the seabed landforms, listed bottom to top with SEED's own
+// opacities - the same stack send.html shows.
+var SEED_MARINE = 'https://mapprod2.environment.nsw.gov.au/arcgis/rest/services/Coastal_Marine/';
 var MAP_OVERLAYS = [
-  // { url:'https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/<Folder>/<Service>/MapServer', layers:'show:2' },
+  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:2',     opacity: 0.7 },  // depth
+  { url: SEED_MARINE + 'SeabedLandforms/MapServer',                       layers: 'show:0,1,2', opacity: 0.6 },  // landforms
+  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:1',     opacity: 0.45 }, // slope
+  { url: SEED_MARINE + 'NSW_Marine_Lidar_Bathymetry_Data_2018/MapServer', layers: 'show:0',     opacity: 1 }     // 5 m contours
 ];
+// A slow SEED server must not hold the map up: an overlay that has not
+// arrived by then is left out.
+var OVERLAY_WAIT_MS = 12000;
 var _lastEntry = null;            // remembered so we can re-render if needed
 function lon2merc(lon) { return lon * 20037508.342789244 / 180; }
 function lat2merc(lat) {
@@ -2149,9 +2159,11 @@ function renderMapImage(entry) {
       img.crossOrigin = 'anonymous';
       img.onload = function () { resolve(img); };
       img.onerror = function () { resolve(null); };
+      setTimeout(function () { resolve(null); }, OVERLAY_WAIT_MS);
       img.src = arcgisExportURL(lyr, bbox3857, ovW, ovH);
     });
   });
+  var ovDrawn = 0;                 // how many overlays made it onto the map
 
   Promise.all([Promise.all(jobs), Promise.all(ovJobs)]).then(function (res) {
     var tiles = res[0], ovs = res[1];
@@ -2171,9 +2183,16 @@ function renderMapImage(entry) {
       for (var gy = boxTop; gy <= boxTop + plotH; gy += 80) { ctx.beginPath(); ctx.moveTo(boxLeft, gy); ctx.lineTo(boxLeft + plotW, gy); ctx.stroke(); }
     }
     // SEED / ArcGIS overlays composited over the basemap.
-    var ovDrawn = 0;
-    ovs.forEach(function (oimg) { if (oimg) { ctx.drawImage(oimg, boxLeft, boxTop, plotW, plotH); ovDrawn++; } });
-    if (ovList.length && !ovDrawn) log('Overlay layers did not load (offline or blocked)', 'lerr');
+    ovs.forEach(function (oimg, k) {
+      if (!oimg) return;
+      var op = ovList[k].opacity;
+      ctx.globalAlpha = (typeof op === 'number') ? op : 1;
+      ctx.drawImage(oimg, boxLeft, boxTop, plotW, plotH);
+      ovDrawn++;
+    });
+    ctx.globalAlpha = 1;
+    if (ovList.length && !ovDrawn) log('SEED seabed layers did not load (offline or blocked) — base map only', 'lerr');
+    else if (ovDrawn < ovList.length) log((ovList.length - ovDrawn) + ' SEED seabed layer(s) did not load — the rest are on the map', 'lerr');
     // Very slight wash so bright overlays read on the map without muddying it.
     ctx.fillStyle = 'rgba(8,12,16,0.06)';
     ctx.fillRect(boxLeft, boxTop, plotW, plotH);
@@ -2315,6 +2334,7 @@ function renderMapImage(entry) {
     // Attribution (required) + offline note if map tiles missing
     ctx.font = '20px ' + MONO; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
     var attr = loaded ? 'Map © Esri, HERE, Garmin, USGS, NGA' : 'No map tiles (offline) — schematic only';
+    if (ovDrawn) attr += ' · Seabed © State of NSW (SEED)';
     var aw = ctx.measureText(attr).width;
     ctx.fillStyle = 'rgba(8,12,16,0.7)'; ctx.fillRect(boxLeft + plotW - aw - 12, boxTop + plotH - 29, aw + 10, 27);
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText(attr, boxLeft + plotW - 6, boxTop + plotH - 9);
