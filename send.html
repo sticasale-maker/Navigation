@@ -109,9 +109,7 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
 .labels { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 13px; color: var(--muted); }
 .labels label.check { font-size: 13px; gap: 6px; }
 .labels label.check input { width: 16px; height: 16px; }
-.leaflet-tooltip.mk-label { cursor: pointer; max-width: 260px; white-space: normal; }
-.mk-label .l1 { color: #ffffff; }
-.mk-label .l2 { color: #9fb4c2; font-size: 11px; }
+.leaflet-tooltip.mk-label { cursor: pointer; white-space: nowrap; }
 #drawBar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--warn); }
 #drawBar span { flex: 1 1 200px; }
 textarea { font: 15px/1.5 'Segoe UI', system-ui, sans-serif; min-height: 96px; resize: vertical; }
@@ -159,7 +157,16 @@ path.mk-sel { cursor: move; }
 .leaflet-div-icon.mk-icon { background: none; border: none; }
 .mk-dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #001018; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.75); }
 .mk-dot.sel { box-shadow: 0 0 0 3px #fff, 0 0 10px #fff; }
-.leaflet-tooltip.mk-label { background: rgba(10,14,18,0.85); color: #c8dce8; border: 1px solid rgba(0,212,255,0.3); font: 12px var(--mono); box-shadow: none; }
+/* Small and tight: with several marks close together, bigger labels hid the seabed. */
+/* Bare text, no box: a thin dark outline keeps it readable over sand, reef and satellite. */
+.leaflet-tooltip.mk-label {
+  background: transparent; border: none; box-shadow: none; padding: 0;
+  color: #0a0e12; font: 600 9px/1.25 'Segoe UI', system-ui, sans-serif;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 1px #fff;
+}
+#mapView.base-sat .leaflet-tooltip.mk-label { color: #ffffff; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 1px #000; }
+.leaflet-tooltip.mk-label .l1, .leaflet-tooltip.mk-label .l2 { color: inherit; }
+.leaflet-tooltip.mk-label .l2 { font-weight: 400; }
 .leaflet-tooltip.mk-label::before { display: none; }
 </style>
 </head>
@@ -599,6 +606,7 @@ function seedIdentify(url, layer, latlng) {
     view.base = name;
     $('baseTopo').className = name === 'topo' ? 'on' : '';
     $('baseSat').className = name === 'sat' ? 'on' : '';
+    $('mapView').classList.toggle('base-sat', name === 'sat');   // labels switch to light text
     saveView(view);
   }
   $('baseTopo').addEventListener('click', function () { setBase('topo'); });
@@ -1489,12 +1497,16 @@ function labelFor(m) {
   if (on.depth && m.depth !== null && m.depth !== undefined) sub.push(m.depth + ' m deep');
   if (on.size && m.kind === 'area') sub.push(shapeText(m));
   if (on.seen && m.seen) sub.push(m.seen);
-  if (on.notes && m.notes) sub.push(m.notes.split(/\n/)[0].slice(0, 80));
+  if (on.notes && m.notes) {
+    var note = m.notes.split(/\n/)[0];
+    sub.push(note.length > 40 ? note.slice(0, 39) + '…' : note);
+  }
   var permanent = !!(top.length || sub.length);
   if (!permanent) { if (!m.name) return null; top = [m.name]; }
-  var el = document.createElement('div');
-  if (top.length) { var a = document.createElement('div'); a.className = 'l1'; a.textContent = top.join(' · '); el.appendChild(a); }
-  if (sub.length) { var b = document.createElement('div'); b.className = 'l2'; b.textContent = sub.join(' · '); el.appendChild(b); }
+  // One line: the name part in white, the details after it in grey.
+  var el = document.createElement('span');
+  if (top.length) { var a = document.createElement('span'); a.className = 'l1'; a.textContent = top.join(' · '); el.appendChild(a); }
+  if (sub.length) { var b = document.createElement('span'); b.className = 'l2'; b.textContent = (top.length ? ' · ' : '') + sub.join(' · '); el.appendChild(b); }
   return { el: el, permanent: permanent };
 }
 
