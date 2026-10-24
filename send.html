@@ -106,6 +106,12 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
 .tools button.on { border-color: var(--warn); color: var(--warn); background: rgba(255,107,53,0.12); }
 .tools button#toolPick.on { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.12); }
 .tools label.check { font-size: 13px; gap: 6px; margin-left: 6px; }
+.labels { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 13px; color: var(--muted); }
+.labels label.check { font-size: 13px; gap: 6px; }
+.labels label.check input { width: 16px; height: 16px; }
+.leaflet-tooltip.mk-label { cursor: pointer; max-width: 260px; white-space: normal; }
+.mk-label .l1 { color: #ffffff; }
+.mk-label .l2 { color: #9fb4c2; font-size: 11px; }
 #drawBar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--warn); }
 #drawBar span { flex: 1 1 200px; }
 textarea { font: 15px/1.5 'Segoe UI', system-ui, sans-serif; min-height: 96px; resize: vertical; }
@@ -121,6 +127,14 @@ input[type=date] { color-scheme: dark; font-size: 15px; }
 .btns button { flex: 1; }
 button.alt { border-color: var(--accent2); color: var(--accent2); background: rgba(0,255,157,0.06); }
 button.danger { border-color: var(--warn); color: var(--warn); }
+.btns button.del { flex: 0 0 auto; padding: 13px 14px; border-color: rgba(255,107,53,0.5); color: var(--warn); background: transparent; }
+.btns button.del.armed { background: rgba(255,107,53,0.18); border-color: var(--warn); }
+.mkrow > div { flex: 1; }
+.mkrow button.quiet { flex: 0 0 auto; padding: 4px 8px; }
+.mk-handle { width: 14px; height: 14px; background: #ffffff; border: 2px solid #001018; border-radius: 3px; cursor: grab; box-shadow: 0 0 4px rgba(0,0,0,0.6); }
+.mk-handle.wid { background: #ff6b35; }
+.mk-handle.mid { background: #ffd23f; border-radius: 50%; cursor: move; }
+path.mk-sel { cursor: move; }
 #edStatus, #mkStatus { font-size: 14px; min-height: 21px; }
 #edStatus.ok, #mkStatus.ok { color: var(--accent2); }
 #edStatus.bad, #mkStatus.bad { color: var(--warn); }
@@ -173,7 +187,15 @@ button.danger { border-color: var(--warn); color: var(--warn); }
       <button id="toolEllipse" title="Click the centre, the end of the long side, then the width">+ ELLIPSE</button>
       <button id="toolFree" title="Hold the mouse button and draw">+ FREEHAND</button>
       <button id="toolCoords" title="Type or paste the coordinates">+ BY COORDS</button>
-      <label class="check"><input id="showLabels" type="checkbox"> Names on map</label>
+    </div>
+    <div class="labels" id="labelPick">
+      <span>Labels on map:</span>
+      <label class="check"><input type="checkbox" data-lab="name"> Name</label>
+      <label class="check"><input type="checkbox" data-lab="layer"> Layer</label>
+      <label class="check"><input type="checkbox" data-lab="depth"> Depth</label>
+      <label class="check"><input type="checkbox" data-lab="size"> Size</label>
+      <label class="check"><input type="checkbox" data-lab="seen"> Date</label>
+      <label class="check"><input type="checkbox" data-lab="notes"> Notes</label>
     </div>
     <div class="layers" id="layerToggles"></div>
     <div id="mapView"></div>
@@ -210,29 +232,29 @@ button.danger { border-color: var(--warn); color: var(--warn); }
       <label id="gTypeL">Type
         <select id="gType">
           <option value="point">Point</option>
-          <option value="circle">Circle</option>
-          <option value="ellipse">Ellipse</option>
+          <option value="round">Circle or ellipse</option>
           <option value="poly">Area from a list of corners</option>
         </select>
       </label>
-      <label id="gCentreL"><span id="gCentreT">Coordinates</span>
+      <label><span id="gCentreT">Coordinates</span>
         <input id="gCentre" type="text" autocomplete="off" spellcheck="false" placeholder="-33.80012, 151.29834">
       </label>
       <div class="three" id="gSize">
-        <label><span id="gRxT">Radius m</span>
-          <input id="gRx" type="number" min="0.5" max="50000" step="0.5">
+        <label>Length m
+          <input id="gLen" type="number" min="0.5" max="100000" step="0.5">
         </label>
-        <label id="gRyL">Short radius m
-          <input id="gRy" type="number" min="0.5" max="50000" step="0.5">
+        <label>Width m
+          <input id="gWid" type="number" min="0.5" max="100000" step="0.5">
         </label>
-        <label id="gRotL">Bearing °
-          <input id="gRot" type="number" min="0" max="179" step="1">
+        <label><span id="gRotT">Bearing °</span>
+          <input id="gRot" type="number" min="-359" max="359" step="1">
         </label>
       </div>
       <label id="gListL">Corners, one per line
         <textarea id="gList" spellcheck="false" placeholder="-33.80012, 151.29834&#10;-33.80050, 151.29900&#10;-33.80100, 151.29820"></textarea>
       </label>
       <div class="hint" id="gMsg"></div>
+      <div class="hint" id="gHint"></div>
     </div>
     <label>Notes
       <textarea id="edNotes" maxlength="2000" placeholder="What is there, how to find it, what to bring next time"></textarea>
@@ -241,11 +263,9 @@ button.danger { border-color: var(--warn); color: var(--warn); }
     <div class="btns">
       <button id="edSave">SAVE MARK</button>
       <button id="edSend" class="alt">SEND TO PHONE</button>
+      <button id="edDel" class="del">DELETE</button>
     </div>
-    <div class="row">
-      <div id="edStatus"></div>
-      <button class="quiet" id="edDel">DELETE</button>
-    </div>
+    <div id="edStatus"></div>
   </section>
 
   <section id="marksSec">
@@ -760,7 +780,10 @@ function centroid(ring) {
 }
 function hasGeom(m) { return m.kind === 'point' ? !!m.pos : !!(m.ring && m.ring.length >= 3); }
 function markCentre(m) { return m.kind === 'point' ? m.pos : (m.geo ? m.geo.c : centroid(m.ring)); }
-function geoType(m) { return m.kind === 'point' ? 'point' : (m.shape || 'poly'); }
+function geoType(m) {
+  if (m.kind === 'point') return 'point';
+  return m.shape === 'circle' || m.shape === 'ellipse' ? 'round' : (m.shape || 'poly');
+}
 function areaM2(ring) {
   var c = centroid(ring), a = 0;
   for (var i = 0; i < ring.length; i++) {
@@ -773,7 +796,7 @@ function fmtArea(a) { return a < 10000 ? Math.round(a) + ' m²' : (a / 10000).to
 function fmtM(m) { return m < 1000 ? (m < 10 ? m.toFixed(1) : Math.round(m)) + ' m' : (m / 1000).toFixed(2) + ' km'; }
 function shapeText(m) {
   if (m.kind === 'point') return fmt(m.pos[0], m.pos[1]);
-  if (m.shape === 'circle' && m.geo) return 'circle, radius ' + fmtM(m.geo.rx);
+  if (m.shape === 'circle' && m.geo) return 'circle ' + fmtM(m.geo.rx * 2) + ' across';
   if (m.shape === 'ellipse' && m.geo) return 'ellipse ' + fmtM(m.geo.rx * 2) + ' × ' + fmtM(m.geo.ry * 2);
   return (m.shape === 'free' ? 'freehand area ' : 'area ') + fmtArea(areaM2(m.ring));
 }
@@ -867,7 +890,10 @@ function drawMarks() {
 function redrawEditShape() {
   if (!lmap || !edit) return;
   if (edit.temp) { lmap.removeLayer(edit.temp); edit.temp = null; }
-  if (hasGeom(edit.m)) edit.temp = shapeFor(edit.m, true).addTo(lmap);
+  removeHandles();
+  if (!hasGeom(edit.m)) return;
+  edit.temp = shapeFor(edit.m, true).addTo(lmap);
+  if (edit.m.kind === 'area') makeHandles();
 }
 function dotIcon(color, sel) {
   return L.divIcon({
@@ -887,11 +913,14 @@ function shapeFor(m, sel) {
       edInfo(); lookupSeed();
     });
   } else {
-    s = L.polygon(m.ring, { color: color, weight: sel ? 4 : 2, fillColor: color, fillOpacity: sel ? 0.28 : 0.15, bubblingMouseEvents: false });
+    s = L.polygon(m.ring, { color: color, weight: sel ? 4 : 2, fillColor: color, fillOpacity: sel ? 0.28 : 0.15, bubblingMouseEvents: false, className: sel ? 'mk-sel' : '' });
+    if (sel) s.on('mousedown', startBodyDrag);
   }
-  if (m.name) {
-    s.bindTooltip(m.name, {
-      className: 'mk-label', permanent: !!mview.labels,
+  var label = labelFor(m);
+  if (label) {
+    // Interactive, so clicking a label opens its mark like clicking the mark.
+    s.bindTooltip(label.el, {
+      className: 'mk-label', permanent: label.permanent, interactive: label.permanent,
       direction: m.kind === 'point' ? 'right' : 'center', offset: m.kind === 'point' ? [10, 0] : [0, 0]
     });
   }
@@ -983,7 +1012,22 @@ function renderMarkList() {
     sub.textContent = layerOf(m.layer).name + '  ·  ' + markSub(m);
     if (m.notes) row.title = m.notes;
     txt.appendChild(nm); txt.appendChild(sub);
-    row.appendChild(sw); row.appendChild(txt);
+    var armed = delArm === m.id;
+    var del = document.createElement('button');
+    del.className = 'quiet' + (armed ? ' danger' : '');
+    del.textContent = armed ? 'DELETE?' : '✕';
+    del.title = 'Delete this mark';
+    del.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!armed) {
+        delArm = m.id; renderMarkList();
+        setTimeout(function () { if (delArm === m.id) { delArm = null; renderMarkList(); } }, 4000);
+        return;
+      }
+      delArm = null;
+      removeMark(m.id);
+    });
+    row.appendChild(sw); row.appendChild(txt); row.appendChild(del);
     row.addEventListener('click', function () {
       if (mview.off[m.layer]) { delete mview.off[m.layer]; saveMview(); }
       openEditor(m, false);
@@ -1044,9 +1088,12 @@ function newMark(kind, geom) {
 function openEditor(m, isNew, byCoords) {
   if (!m) return;
   if (edit && edit.temp) lmap.removeLayer(edit.temp);
-  edit = { m: JSON.parse(JSON.stringify(m)), isNew: isNew, byCoords: !!byCoords, geoType: geoType(m), geoErr: '', temp: null };
+  removeHandles();
+  edit = { m: JSON.parse(JSON.stringify(m)), isNew: isNew, byCoords: !!byCoords, geoType: geoType(m), geoErr: '', temp: null, handles: null, dragging: null };
+  edit.frame = makeFrame(edit.m);
   $('editor').hidden = false;
-  $('edTitle').textContent = byCoords ? 'New mark by coordinates' : (isNew ? 'New ' : 'Edit ') + (m.kind === 'point' ? 'mark' : geoType(m) === 'poly' || geoType(m) === 'free' ? 'area' : geoType(m));
+  $('edTitle').textContent = byCoords ? 'New mark by coordinates' : (isNew ? 'New ' : 'Edit ') +
+    (m.kind === 'point' ? 'mark' : m.shape === 'circle' || m.shape === 'ellipse' ? m.shape : 'area');
   $('edName').value = m.name || '';
   renderLayerSelect();
   $('edLayer').value = m.layer;
@@ -1054,7 +1101,7 @@ function openEditor(m, isNew, byCoords) {
   $('edNotes').value = m.notes || '';
   $('edDel').hidden = isNew;
   $('edDel').textContent = 'DELETE';
-  $('edDel').classList.remove('danger');
+  $('edDel').classList.remove('armed');
   edSay('', '');
   fillGeo();
   edInfo();
@@ -1065,6 +1112,7 @@ function openEditor(m, isNew, byCoords) {
 }
 function closeEditor() {
   if (edit && edit.temp && lmap) lmap.removeLayer(edit.temp);
+  removeHandles();
   edit = null;
   $('editor').hidden = true;
   drawMarks();
@@ -1072,10 +1120,11 @@ function closeEditor() {
 function edInfo() {
   var m = edit.m, bits = [];
   if (!hasGeom(m)) { $('edInfo').textContent = ''; return; }
+  var f = edit.frame;
   if (m.kind === 'point') bits.push(fmt(m.pos[0], m.pos[1]));
-  else if (m.shape === 'circle' && m.geo) bits.push('Circle, radius ' + fmtM(m.geo.rx) + ', ' + fmtArea(areaM2(m.ring)));
-  else if (m.shape === 'ellipse' && m.geo) bits.push('Ellipse ' + fmtM(m.geo.rx * 2) + ' × ' + fmtM(m.geo.ry * 2) + ', long side at ' + Math.round(m.geo.rot) + '°, ' + fmtArea(areaM2(m.ring)));
-  else bits.push((m.shape === 'free' ? 'Freehand area of ' : 'Area of ') + fmtArea(areaM2(m.ring)) + ', ' + m.ring.length + ' corners');
+  else if (m.shape === 'circle' && m.geo) bits.push('Circle ' + fmtM(m.geo.rx * 2) + ' across, ' + fmtArea(areaM2(m.ring)));
+  else if (m.shape === 'ellipse' && m.geo) bits.push('Ellipse ' + fmtM(m.geo.rx * 2) + ' long × ' + fmtM(m.geo.ry * 2) + ' wide, long side at ' + Math.round(m.geo.rot) + '°, ' + fmtArea(areaM2(m.ring)));
+  else bits.push((m.shape === 'free' ? 'Freehand area ' : 'Area ') + (f ? fmtM(f.L) + ' × ' + fmtM(f.W) + ', ' : '') + fmtArea(areaM2(m.ring)) + ', ' + m.ring.length + ' corners');
   if (m.depth !== null && m.depth !== undefined) bits.push('depth about ' + m.depth + ' m' + (m.kind === 'area' ? ' in the middle' : ''));
   if (m.landform) bits.push(m.landform);
   $('edInfo').textContent = bits.join(' · ') + (m.kind === 'point' ? '. Drag the dot to move it.' : '');
@@ -1095,95 +1144,233 @@ function lookupSeed() {
 var _seedTimer = null;
 function lookupSeedSoon() { clearTimeout(_seedTimer); _seedTimer = setTimeout(lookupSeed, 700); }
 
-// ── Geometry fields in the editor ──
-// Points: the coordinates. Circles and ellipses: centre, radii and bearing.
-// Polygons: one corner per line. Every field takes what the New waypoint
-// box takes (Google Maps copies, links, N/S/E/W, degrees-minutes-seconds).
-function geoVisibility() {
-  var t = edit.geoType, round = t === 'circle' || t === 'ellipse';
-  $('gTypeL').hidden = !edit.byCoords;
-  $('gType').value = t;
-  $('gCentreL').hidden = !(t === 'point' || round);
-  $('gCentreT').textContent = t === 'point' ? 'Coordinates' : 'Centre';
-  $('gSize').hidden = !round;
-  $('gRyL').hidden = $('gRotL').hidden = t !== 'ellipse';
-  $('gRxT').textContent = t === 'ellipse' ? 'Long radius m' : 'Radius m';
-  $('gListL').hidden = t !== 'poly';
+// ── Geometry fields and handles in the editor ──
+// Points: the coordinates. Areas: a frame of centre, length along a bearing
+// and width across it, edited by number or by dragging handles on the map.
+// Circles and ellipses are that frame. Polygons and freehand outlines are
+// held as fractions of the frame they had when opened, so every new size is
+// worked out from the original outline and repeated edits never drift.
+// Coordinate fields take what the New waypoint box takes (Google Maps
+// copies, links, N/S/E/W, degrees-minutes-seconds).
+function frameAxes(rot) {
+  var th = rot * DEG;
+  return { a: [Math.sin(th), Math.cos(th)], b: [Math.cos(th), -Math.sin(th)] };   // along, across (east, north)
 }
-function fillGeo() {
-  var m = edit.m, t = edit.geoType;
-  var c = t === 'point' ? m.pos : (m.geo && m.geo.c);
-  $('gCentre').value = c ? c[0] + ', ' + c[1] : '';
-  $('gRx').value = m.geo ? m.geo.rx : '';
-  $('gRy').value = m.geo ? m.geo.ry : '';
-  $('gRot').value = m.geo ? Math.round(m.geo.rot) : '';
-  $('gList').value = t === 'poly' && m.ring ? m.ring.map(function (p) { return p[0] + ', ' + p[1]; }).join('\n') : '';
-  $('gMsg').textContent = t === 'free' ? 'Freehand outline: draw it again with + FREEHAND to change the shape.' : '';
-  $('gMsg').className = 'hint';
-  geoVisibility();
+function makeFrame(m) {
+  if (m.kind === 'point' || !hasGeom(m)) return null;
+  if (m.geo) return { c: m.geo.c.slice(), L: m.geo.rx * 2, W: m.geo.ry * 2, rot: m.geo.rot, base: null };
+  var c0 = centroid(m.ring), en = m.ring.map(function (p) { return enOf(c0, p); });
+  var es = en.map(function (q) { return q[0]; }), ns = en.map(function (q) { return q[1]; });
+  var minE = Math.min.apply(null, es), maxE = Math.max.apply(null, es);
+  var minN = Math.min.apply(null, ns), maxN = Math.max.apply(null, ns);
+  var W = Math.max(maxE - minE, 0.5), L = Math.max(maxN - minN, 0.5);
+  var ce = (minE + maxE) / 2, cn = (minN + maxN) / 2;
+  return {
+    c: offsetLL(c0, ce, cn), L: L, W: W, rot: 0,
+    base: en.map(function (q) { return [(q[1] - cn) / L, (q[0] - ce) / W]; })
+  };
 }
-function applyGeo() {
-  var m = edit.m, t = edit.geoType, err = '';
-  if (t === 'point' || t === 'circle' || t === 'ellipse') {
-    var p = parseCoords($('gCentre').value);
-    if (p.error !== undefined) err = p.error || 'Enter the coordinates.';
-    else if (t === 'point') {
-      m.kind = 'point'; m.pos = [p.lat, p.lon];
-      delete m.ring; delete m.shape; delete m.geo;
-    } else {
-      var rx = parseFloat($('gRx').value);
-      var ry = t === 'circle' ? rx : parseFloat($('gRy').value);
-      var rot = t === 'circle' ? 0 : (parseFloat($('gRot').value) || 0);
-      if (!(rx >= 0.5 && rx <= 50000)) err = 'The radius must be between 0.5 m and 50 km.';
-      else if (!(ry >= 0.5 && ry <= 50000)) err = 'The short radius must be between 0.5 m and 50 km.';
-      else {
-        var g = { c: [p.lat, p.lon], rx: +rx.toFixed(1), ry: +ry.toFixed(1), rot: ((Math.round(rot) % 180) + 180) % 180 };
-        m.kind = 'area'; m.shape = t; m.geo = g; m.ring = ellipseRing(g);
-        delete m.pos;
-      }
-    }
-  } else if (t === 'poly') {
-    var lines = $('gList').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean), ring = [];
-    for (var i = 0; i < lines.length && !err; i++) {
-      var q = parseCoords(lines[i]);
-      if (q.error !== undefined) err = 'Line ' + (i + 1) + ': ' + (q.error || 'not coordinates');
-      else ring.push([q.lat, q.lon]);
-    }
-    if (!err && ring.length > 3 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
-    if (!err && ring.length < 3) err = 'An area needs at least 3 corners, one per line.';
-    if (!err && ring.length > 200) err = 'An area can have at most 200 corners.';
-    if (!err) {
-      m.kind = 'area'; m.shape = 'poly'; m.ring = ring;
-      delete m.geo; delete m.pos;
-    }
+function frameRing(f) {
+  if (!f.base) return ellipseRing({ c: f.c, rx: f.L / 2, ry: f.W / 2, rot: f.rot });
+  var ax = frameAxes(f.rot);
+  return f.base.map(function (q) {
+    var u = q[0] * f.L, v = q[1] * f.W;
+    return offsetLL(f.c, ax.a[0] * u + ax.b[0] * v, ax.a[1] * u + ax.b[1] * v);
+  });
+}
+function fmtC(c) { return (+c[0].toFixed(6)) + ', ' + (+c[1].toFixed(6)); }
+
+// Rebuilds the area from its frame. `from` is the field being typed in,
+// which is left alone so the cursor does not jump.
+function applyFrame(from) {
+  var m = edit.m, f = edit.frame;
+  m.kind = 'area';
+  delete m.pos;
+  if (!f.base) {
+    var g = { c: [+f.c[0].toFixed(6), +f.c[1].toFixed(6)], rx: +(f.L / 2).toFixed(2), ry: +(f.W / 2).toFixed(2),
+              rot: ((Math.round(f.rot) % 180) + 180) % 180 };
+    m.shape = Math.abs(g.rx - g.ry) < 0.05 ? 'circle' : 'ellipse';
+    m.geo = g;
+    m.ring = ellipseRing(g);
   } else {
-    return;   // freehand outlines are not edited by numbers
+    m.ring = frameRing(f);
   }
-  edit.geoErr = err;
-  $('gMsg').textContent = err;
-  $('gMsg').className = err ? 'hint bad' : 'hint';
-  if (err) return;
+  edit.geoErr = '';
+  if (from !== 'gCentre') $('gCentre').value = fmtC(f.c);
+  if (from !== 'gLen') $('gLen').value = +f.L.toFixed(1);
+  if (from !== 'gWid') $('gWid').value = +f.W.toFixed(1);
+  if (from !== 'gRot') $('gRot').value = Math.round(f.rot);
+  if (from !== 'gList' && edit.geoType === 'poly') $('gList').value = m.ring.map(function (p) { return p[0] + ', ' + p[1]; }).join('\n');
+  $('gMsg').textContent = ''; $('gMsg').className = 'hint';
+  if (edit.temp && edit.temp.setLatLngs) edit.temp.setLatLngs(m.ring); else redrawEditShape();
+  placeHandles();
   m.depth = null; m.landform = '';
-  redrawEditShape();
   edInfo();
   lookupSeedSoon();
 }
-['gCentre', 'gRx', 'gRy', 'gRot', 'gList'].forEach(function (id) {
-  $(id).addEventListener('input', function () { if (edit) applyGeo(); });
-  // Once a value is complete, bring it into view.
+
+// ── Handles: white squares set the length, orange the width, yellow moves ──
+function handleSpots(f) {
+  var ax = frameAxes(f.rot), hl = f.L / 2, hw = f.W / 2;
+  return {
+    mid: f.c,
+    l1: offsetLL(f.c, ax.a[0] * hl, ax.a[1] * hl), l2: offsetLL(f.c, -ax.a[0] * hl, -ax.a[1] * hl),
+    w1: offsetLL(f.c, ax.b[0] * hw, ax.b[1] * hw), w2: offsetLL(f.c, -ax.b[0] * hw, -ax.b[1] * hw)
+  };
+}
+var HANDLE_TIPS = { mid: 'Drag to move', l1: 'Drag to change the length', l2: 'Drag to change the length', w1: 'Drag to change the width', w2: 'Drag to change the width' };
+function removeHandles() {
+  if (!edit || !edit.handles) return;
+  Object.keys(edit.handles).forEach(function (k) { lmap.removeLayer(edit.handles[k]); });
+  edit.handles = null;
+}
+function makeHandles() {
+  removeHandles();
+  if (!lmap || !edit || !edit.frame || !hasGeom(edit.m)) return;
+  edit.handles = {};
+  var spots = handleSpots(edit.frame);
+  Object.keys(spots).forEach(function (k) {
+    var kind = k === 'mid' ? 'mid' : k.charAt(0) === 'l' ? 'len' : 'wid';
+    var h = L.marker(spots[k], {
+      icon: L.divIcon({ className: 'mk-icon', iconSize: [14, 14], iconAnchor: [7, 7], html: '<div class="mk-handle ' + kind + '"></div>' }),
+      draggable: true, keyboard: false, zIndexOffset: 2000, title: HANDLE_TIPS[k]
+    }).addTo(lmap);
+    h.on('drag', function () { dragHandle(k, h.getLatLng()); });
+    h.on('dragend', function () { edit.dragging = null; placeHandles(); });
+    edit.handles[k] = h;
+  });
+}
+function placeHandles() {
+  if (!edit || !edit.handles) return;
+  var spots = handleSpots(edit.frame);
+  Object.keys(spots).forEach(function (k) { if (k !== edit.dragging) edit.handles[k].setLatLng(spots[k]); });
+}
+function dragHandle(k, ll) {
+  var f = edit.frame, p = [ll.lat, ll.lng];
+  edit.dragging = k;
+  if (k === 'mid') {
+    f.c = p;
+  } else {
+    var en = enOf(f.c, p), ax = frameAxes(f.rot), along = k.charAt(0) === 'l';
+    var d = 2 * Math.abs(en[0] * (along ? ax.a : ax.b)[0] + en[1] * (along ? ax.a : ax.b)[1]);
+    d = Math.min(100000, Math.max(0.5, d));
+    if (along) f.L = d; else f.W = d;
+  }
+  applyFrame();
+}
+
+// ── Fields ──
+function geoVisibility() {
+  var t = edit.geoType, area = t !== 'point';
+  $('gTypeL').hidden = !edit.byCoords;
+  $('gType').value = t === 'free' ? 'poly' : t;
+  $('gCentreT').textContent = area ? 'Centre' : 'Coordinates';
+  $('gSize').hidden = !area;
+  $('gRotT').textContent = t === 'round' ? 'Bearing °' : 'Turn °';
+  $('gListL').hidden = t !== 'poly';
+  $('gHint').textContent = area ? 'On the map: drag the shape (or the yellow dot) to move it, the white squares to change the length, the orange ones for the width.' : '';
+}
+function fillGeo() {
+  var m = edit.m, f = edit.frame;
+  $('gCentre').value = m.kind === 'point' ? (m.pos ? fmtC(m.pos) : '') : (f ? fmtC(f.c) : '');
+  $('gLen').value = f ? +f.L.toFixed(1) : '';
+  $('gWid').value = f ? +f.W.toFixed(1) : '';
+  $('gRot').value = f ? Math.round(f.rot) : '';
+  $('gList').value = edit.geoType === 'poly' && m.ring ? m.ring.map(function (p) { return p[0] + ', ' + p[1]; }).join('\n') : '';
+  $('gMsg').textContent = ''; $('gMsg').className = 'hint';
+  geoVisibility();
+}
+function geoError(err) {
+  edit.geoErr = err;
+  $('gMsg').textContent = err;
+  $('gMsg').className = err ? 'hint bad' : 'hint';
+}
+function applyFields(from) {
+  var m = edit.m, t = edit.geoType;
+  var p = parseCoords($('gCentre').value);
+  if (p.error !== undefined) return geoError(p.error || 'Enter the coordinates.');
+  if (t === 'point') {
+    m.kind = 'point'; m.pos = [p.lat, p.lon];
+    delete m.ring; delete m.shape; delete m.geo;
+    edit.frame = null;
+    geoError('');
+    redrawEditShape();
+    m.depth = null; m.landform = '';
+    edInfo(); lookupSeedSoon();
+    return;
+  }
+  var len = parseFloat($('gLen').value), wid = parseFloat($('gWid').value), rot = parseFloat($('gRot').value) || 0;
+  if (!(len >= 0.5 && len <= 100000)) return geoError('The length must be between 0.5 m and 100 km.');
+  if (!(wid >= 0.5 && wid <= 100000)) return geoError('The width must be between 0.5 m and 100 km.');
+  if (!edit.frame) {
+    if (t !== 'round') return geoError('Enter the corners, one per line.');
+    edit.frame = { c: [p.lat, p.lon], L: len, W: wid, rot: rot, base: null };
+  }
+  var f = edit.frame;
+  f.c = [p.lat, p.lon]; f.L = len; f.W = wid; f.rot = rot;
+  applyFrame(from);
+}
+function applyList() {
+  var m = edit.m, ring = [];
+  var lines = $('gList').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+  for (var i = 0; i < lines.length; i++) {
+    var q = parseCoords(lines[i]);
+    if (q.error !== undefined) return geoError('Line ' + (i + 1) + ': ' + (q.error || 'not coordinates'));
+    ring.push([q.lat, q.lon]);
+  }
+  if (ring.length > 3 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1]) ring.pop();
+  if (ring.length < 3) return geoError('An area needs at least 3 corners, one per line.');
+  if (ring.length > 200) return geoError('An area can have at most 200 corners.');
+  m.kind = 'area'; m.shape = 'poly'; m.ring = ring;
+  delete m.geo; delete m.pos;
+  edit.frame = makeFrame(m);
+  applyFrame('gList');
+}
+['gCentre', 'gLen', 'gWid', 'gRot'].forEach(function (id) {
+  $(id).addEventListener('input', function () { if (edit) applyFields(id); });
+});
+$('gList').addEventListener('input', function () { if (edit) applyList(); });
+['gCentre', 'gList'].forEach(function (id) {
+  // Once a position is complete, bring it into view.
   $(id).addEventListener('change', function () { if (edit && !edit.geoErr) zoomTo(edit.m); });
 });
 $('gCentre').addEventListener('keydown', function (e) { if (e.key === 'Enter' && edit && !edit.geoErr) zoomTo(edit.m); });
 $('gType').addEventListener('change', function () {
   if (!edit) return;
   edit.geoType = $('gType').value;
-  if (!$('gRx').value) $('gRx').value = 20;
-  if (!$('gRy').value) $('gRy').value = 10;
-  if (!$('gRot').value) $('gRot').value = 0;
+  edit.frame = null;
+  if (edit.geoType === 'round' && !$('gLen').value) { $('gLen').value = 40; $('gWid').value = 40; $('gRot').value = 0; }
   geoVisibility();
-  applyGeo();
+  if (edit.geoType === 'poly') applyList(); else applyFields();
   if (!edit.geoErr) zoomTo(edit.m);
 });
+
+// ── Moving an area by dragging its body ──
+// Only the area open in the editor can be dragged, so panning the map over
+// other marks still works as before.
+function startBodyDrag(e) {
+  if (tool !== 'pick' || !edit || !edit.frame) return;
+  L.DomEvent.preventDefault(e.originalEvent);
+  lmap.dragging.disable();
+  edit.bodyDrag = { ll: [e.latlng.lat, e.latlng.lng], c: edit.frame.c.slice() };
+  lmap.on('mousemove', bodyDragMove);
+  document.addEventListener('mouseup', endBodyDrag);
+}
+function bodyDragMove(e) {
+  if (!edit || !edit.bodyDrag) return;
+  var d = edit.bodyDrag, en = enOf(d.ll, [e.latlng.lat, e.latlng.lng]);
+  edit.frame.c = offsetLL(d.c, en[0], en[1]);
+  applyFrame();
+}
+function endBodyDrag() {
+  document.removeEventListener('mouseup', endBodyDrag);
+  lmap.off('mousemove', bodyDragMove);
+  lmap.dragging.enable();
+  // The browser follows the release with a click on the map, which must not
+  // pick a waypoint.
+  toolDone = Date.now();
+  if (edit) edit.bodyDrag = null;
+}
 
 function readEditor() {
   var m = edit.m;
@@ -1213,19 +1400,29 @@ function saveEdit() {
     if (/secret|https/.test(err.message)) $('settings').open = true;
   }).then(function () { $('edSave').disabled = false; });
 }
-function deleteMark() {
-  var btn = $('edDel');
-  if (!btn.classList.contains('danger')) { btn.textContent = 'SURE? DELETE'; btn.classList.add('danger'); return; }
-  var id = edit.m.id, name = edit.m.name;
-  btn.disabled = true;
-  api('DELETE', { ids: [id] }, '/marks').then(function () {
-    marks = marks.filter(function (m) { return m.id !== id; });
+function removeMark(id) {
+  var m = marks.filter(function (x) { return x.id === id; })[0], name = m ? m.name : 'mark';
+  return api('DELETE', { ids: [id] }, '/marks').then(function () {
+    marks = marks.filter(function (x) { return x.id !== id; });
     gone[id] = Date.now();
     cacheMarks();
-    closeEditor();
+    if (edit && edit.m.id === id) closeEditor(); else drawMarks();
     mkSay('Deleted "' + name + '".', 'ok');
-  }).catch(function (err) { edSay('Not deleted: ' + err.message + '.', 'bad'); })
-    .then(function () { btn.disabled = false; });
+  }).catch(function (err) {
+    mkSay('Not deleted: ' + err.message + '.', 'bad');
+    throw err;
+  });
+}
+function deleteMark() {
+  var btn = $('edDel');
+  if (!btn.classList.contains('armed')) {
+    btn.textContent = 'SURE?'; btn.classList.add('armed');
+    setTimeout(function () { btn.textContent = 'DELETE'; btn.classList.remove('armed'); }, 4000);
+    return;
+  }
+  btn.disabled = true;
+  removeMark(edit.m.id).catch(function (err) { edSay('Not deleted: ' + err.message + '.', 'bad'); })
+    .then(function () { btn.disabled = false; btn.textContent = 'DELETE'; btn.classList.remove('armed'); });
 }
 // Sends the mark (an area: its centre) to the phone as a waypoint.
 function sendMark() {
@@ -1275,10 +1472,31 @@ $('toolCoords').addEventListener('click', function () {
   setTool('pick');
   openEditor(newMark('point'), true, true);
 });
-$('showLabels').checked = !!mview.labels;
-$('showLabels').addEventListener('change', function () {
-  mview.labels = $('showLabels').checked; saveMview(); drawMarks();
+// Which details the map labels show. With none ticked, the name still
+// appears on hover.
+if (!mview.lab) mview.lab = { name: !!mview.labels };
+Array.prototype.forEach.call(document.querySelectorAll('#labelPick input'), function (box) {
+  var k = box.getAttribute('data-lab');
+  box.checked = !!mview.lab[k];
+  box.addEventListener('change', function () {
+    mview.lab[k] = box.checked; saveMview(); drawMarks();
+  });
 });
+function labelFor(m) {
+  var on = mview.lab || {}, top = [], sub = [];
+  if (on.name && m.name) top.push(m.name);
+  if (on.layer) top.push(layerOf(m.layer).name);
+  if (on.depth && m.depth !== null && m.depth !== undefined) sub.push(m.depth + ' m deep');
+  if (on.size && m.kind === 'area') sub.push(shapeText(m));
+  if (on.seen && m.seen) sub.push(m.seen);
+  if (on.notes && m.notes) sub.push(m.notes.split(/\n/)[0].slice(0, 80));
+  var permanent = !!(top.length || sub.length);
+  if (!permanent) { if (!m.name) return null; top = [m.name]; }
+  var el = document.createElement('div');
+  if (top.length) { var a = document.createElement('div'); a.className = 'l1'; a.textContent = top.join(' · '); el.appendChild(a); }
+  if (sub.length) { var b = document.createElement('div'); b.className = 'l2'; b.textContent = sub.join(' · '); el.appendChild(b); }
+  return { el: el, permanent: permanent };
+}
 
 function startDraw(kind) {
   draw = {
