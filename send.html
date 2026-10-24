@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>DiveNav — Send waypoint</title>
+<title>DiveNav — Marks & waypoints</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
@@ -48,7 +48,7 @@ details > div { display: flex; flex-direction: column; gap: 12px; }
 label { display: flex; flex-direction: column; gap: 6px; font: 11px var(--mono); letter-spacing: 2px; color: var(--muted); text-transform: uppercase; }
 label.check { flex-direction: row; align-items: center; gap: 10px; font: 14px 'Segoe UI', system-ui, sans-serif; letter-spacing: 0; text-transform: none; color: var(--text); }
 label.check input { width: 18px; height: 18px; }
-input[type=text], input[type=url], input[type=password] {
+input[type=text], input[type=url], input[type=password], input[type=date], select, textarea {
   font: 16px var(--mono); color: var(--text);
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px 14px; width: 100%; outline: none;
@@ -99,26 +99,81 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
 #legend:empty { display: none; }
 #legend span { display: inline-flex; align-items: center; gap: 5px; }
 #legend img { width: 14px; height: 14px; }
+
+/* ── Marks ── */
+.tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tools button { padding: 7px 11px; font-size: 12px; letter-spacing: 1px; border-color: var(--border); color: var(--muted); background: transparent; }
+.tools button.on { border-color: var(--warn); color: var(--warn); background: rgba(255,107,53,0.12); }
+.tools button#toolPick.on { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.12); }
+.tools label.check { font-size: 13px; gap: 6px; margin-left: 6px; }
+#drawBar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--warn); }
+#drawBar span { flex: 1 1 200px; }
+textarea { font: 15px/1.5 'Segoe UI', system-ui, sans-serif; min-height: 96px; resize: vertical; }
+select { font-size: 15px; }
+input[type=date] { color-scheme: dark; font-size: 15px; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.btns { display: flex; gap: 8px; }
+.btns button { flex: 1; }
+button.alt { border-color: var(--accent2); color: var(--accent2); background: rgba(0,255,157,0.06); }
+button.danger { border-color: var(--warn); color: var(--warn); }
+#edStatus, #mkStatus { font-size: 14px; min-height: 21px; }
+#edStatus.ok, #mkStatus.ok { color: var(--accent2); }
+#edStatus.bad, #mkStatus.bad { color: var(--warn); }
+#editor { border-color: rgba(255,107,53,0.45); }
+#layerList, #markList { display: flex; flex-direction: column; gap: 6px; }
+.lyr { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.lyr input[type=checkbox] { width: 16px; height: 16px; }
+.lyr input[type=color] { width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: none; cursor: pointer; }
+.lyr input[type=text] { padding: 7px 10px; font-size: 14px; }
+.lyr .n { font: 12px var(--mono); color: var(--muted); min-width: 22px; text-align: right; }
+.addrow { display: flex; gap: 8px; }
+.addrow input { padding: 8px 10px; font-size: 14px; }
+#markList { max-height: 420px; overflow-y: auto; }
+.mkrow { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.mkrow:hover { border-color: var(--accent); }
+.mkrow.dim { opacity: 0.45; }
+.mkrow .sw { width: 12px; height: 12px; flex: 0 0 12px; border-radius: 50%; }
+.mkrow .sw.area { border-radius: 3px; }
+.mkrow .nm { font: 14px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mkrow .sub { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mkrow > div { min-width: 0; }
+.leaflet-div-icon.mk-icon { background: none; border: none; }
+.mk-dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #001018; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.75); }
+.mk-dot.sel { box-shadow: 0 0 0 3px #fff, 0 0 10px #fff; }
+.leaflet-tooltip.mk-label { background: rgba(10,14,18,0.85); color: #c8dce8; border: 1px solid rgba(0,212,255,0.3); font: 12px var(--mono); box-shadow: none; }
+.leaflet-tooltip.mk-label::before { display: none; }
 </style>
 </head>
 <body>
 <main>
-  <h1>DIVENAV <span>/ SEND WAYPOINT</span></h1>
-  <p class="intro">Waypoints sent here wait on the server until the phone collects them: when DiveNav is opened or comes back online, or straight away from LIBRARY → GET WAYPOINTS FROM PC. Never during a dive.</p>
+  <h1>DIVENAV <span>/ MARKS &amp; WAYPOINTS</span></h1>
+  <p class="intro">Mark what you find and where to go back, in layers of your own (bottles, wrecks, …). Marks are kept on the server. Waypoints sent here wait on the server until the phone collects them: when DiveNav is opened or comes back online, or straight away from LIBRARY → GET WAYPOINTS FROM PC. Never during a dive.</p>
 
   <div class="cols">
   <div class="col-map">
   <section id="mapSec">
     <div class="row">
-      <h2>Pick on the SEED map</h2>
+      <h2>SEED map</h2>
       <div class="modes">
         <button id="baseTopo">MAP</button>
         <button id="baseSat">SATELLITE</button>
       </div>
     </div>
-    <div class="hint">NSW SEED seabed data over a base map. Scroll to zoom, drag to move, and click a spot to use it as the waypoint.</div>
+    <div class="hint">NSW SEED seabed data over a base map. Scroll to zoom, drag to move. With PICK WAYPOINT on, a click picks the waypoint. + MARK drops a mark and + AREA outlines one. Click a mark to edit it.</div>
+    <div class="tools">
+      <button id="toolPick" class="on">PICK WAYPOINT</button>
+      <button id="toolPoint">+ MARK</button>
+      <button id="toolArea">+ AREA</button>
+      <label class="check"><input id="showLabels" type="checkbox"> Names on map</label>
+    </div>
     <div class="layers" id="layerToggles"></div>
     <div id="mapView"></div>
+    <div id="drawBar" hidden>
+      <span id="drawMsg"></span>
+      <button class="quiet" id="drawUndo">UNDO CORNER</button>
+      <button class="quiet" id="drawDone">FINISH AREA</button>
+      <button class="quiet" id="drawCancel">CANCEL</button>
+    </div>
     <div id="mapReadout"></div>
     <div id="mapStatus"></div>
     <div id="legend"></div>
@@ -126,6 +181,56 @@ button.quiet { border-color: var(--border); color: var(--muted); background: tra
   </div>
 
   <div class="col-side">
+  <section id="editor" hidden>
+    <div class="row">
+      <h2 id="edTitle">New mark</h2>
+      <button class="quiet" id="edClose">CLOSE</button>
+    </div>
+    <label>Name
+      <input id="edName" type="text" maxlength="60" autocomplete="off" spellcheck="false" placeholder="e.g. Codd bottle in sand gutter">
+    </label>
+    <div class="two">
+      <label>Layer
+        <select id="edLayer"></select>
+      </label>
+      <label>Seen on
+        <input id="edSeen" type="date">
+      </label>
+    </div>
+    <label>Notes
+      <textarea id="edNotes" maxlength="2000" placeholder="What is there, how to find it, what to bring next time"></textarea>
+    </label>
+    <div class="hint" id="edInfo"></div>
+    <div class="btns">
+      <button id="edSave">SAVE MARK</button>
+      <button id="edSend" class="alt">SEND TO PHONE</button>
+    </div>
+    <div class="row">
+      <div id="edStatus"></div>
+      <button class="quiet" id="edDel">DELETE</button>
+    </div>
+  </section>
+
+  <section id="marksSec">
+    <div class="row">
+      <h2>Marks</h2>
+      <div>
+        <button class="quiet" id="mkGeo" title="Download every mark as GeoJSON: a backup that IMPORT can restore">GEOJSON</button>
+        <button class="quiet" id="mkKml" title="Download every mark as KML for Google Earth">KML</button>
+        <button class="quiet" id="mkImport" title="Restore or merge marks from a GeoJSON file">IMPORT</button>
+      </div>
+    </div>
+    <div id="layerList"></div>
+    <div class="addrow">
+      <input id="newLayer" type="text" maxlength="30" autocomplete="off" placeholder="New layer, e.g. Anchors">
+      <button class="quiet" id="addLayer">ADD LAYER</button>
+    </div>
+    <input id="mkSearch" type="text" autocomplete="off" spellcheck="false" placeholder="Search names and notes">
+    <div id="markList"><div class="empty">Not loaded yet.</div></div>
+    <div id="mkStatus"></div>
+    <input id="importFile" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden>
+  </section>
+
   <section>
     <h2>New waypoint</h2>
     <label>Name
@@ -181,10 +286,10 @@ function loadCfg() {
   cfg = cfg || {};
   return { url: cfg.url || DEFAULT_URL, token: cfg.token || '' };
 }
-function inboxUrl() {
+function endpoint(path) {
   var url = loadCfg().url;
   if (url.indexOf('https://') !== 0) return '';
-  try { return new URL('/waypoints', url).href; } catch (e) { return ''; }
+  try { return new URL(path, url).href; } catch (e) { return ''; }
 }
 
 // ── Coordinate parsing ──────────────────────────────────────────────
@@ -266,8 +371,9 @@ function setStatus(msg, cls) {
   $('status').className = cls || '';
 }
 
-function api(method, body) {
-  var url = inboxUrl(), cfg = loadCfg();
+// `path` defaults to the waypoint inbox; marks live at /marks.
+function api(method, body, path) {
+  var url = endpoint(path || '/waypoints'), cfg = loadCfg();
   if (!url) return Promise.reject(new Error('the endpoint URL must start with https://'));
   if (!cfg.token) return Promise.reject(new Error('enter the shared secret under Connection'));
   var opts = { method: method, headers: { Authorization: 'Bearer ' + cfg.token }, cache: 'no-store' };
@@ -373,6 +479,7 @@ var SEED_LAYERS = [
 var SEED_MIN_ZOOM = 11;       // the services draw nothing useful further out
 var VIEW_KEY = 'divenav_pcmapview';
 var lmap = null, pickMarker = null, pickSeq = 0;
+var tool = 'pick';            // pick | point | area
 
 function mapSay(msg, cls) {
   $('mapStatus').textContent = msg;
@@ -503,6 +610,7 @@ function seedIdentify(url, layer, latlng) {
   lmap.on('mousemove', function (e) { $('mapReadout').textContent = fmt(e.latlng.lat, e.latlng.lng); });
   lmap.on('mouseout', function () { $('mapReadout').textContent = ''; });
   lmap.on('click', function (e) {
+    if (tool !== 'pick') return;     // the mark tools have their own handler
     var ll = e.latlng.wrap();
     clearPick();
     var mine = pickSeq;
@@ -542,12 +650,687 @@ function seedIdentify(url, layer, latlng) {
   try { indexedDB.deleteDatabase('divenav_pcmap'); } catch (e) {}
 })();
 
+// ── Marks ───────────────────────────────────────────────────────────
+// Things found and places to go back to, as points or outlined areas, each
+// in a layer (bottles, wrecks, …) that can be shown or hidden. They live on
+// the Worker under /marks; this browser keeps a copy so the map still shows
+// them when the server cannot be reached, and so a reload straight after a
+// change does not lose it to KV's up-to-a-minute list delay.
+var DEFAULT_LAYERS = [
+  { name: 'Bottles', color: '#00ff9d' },
+  { name: 'Wrecks', color: '#ff6b35' },
+  { name: 'Go back', color: '#00d4ff' },
+  { name: 'Hazards', color: '#ff3b5c' }
+];
+var MARKS_CACHE_KEY = 'divenav_marks';
+var MARK_VIEW_KEY = 'divenav_markview';
+var RECENT_MS = 5 * 60 * 1000;
+var COLOR_RE = /^#[0-9a-f]{6}$/i;
+var marks = [], layers = [], gone = {}, layersAt = 0, marksLoaded = false;
+var shapes = {};          // mark id -> Leaflet layer
+var edit = null;          // { m: working copy, isNew, temp: Leaflet layer for a new mark }
+var draw = null;          // area being outlined: { ring, line, dots }
+var delArm = null;        // id armed for a two-tap delete (mark id or layer id)
+var mview = (function () {
+  var v = null;
+  try { v = JSON.parse(localStorage.getItem(MARK_VIEW_KEY) || 'null'); } catch (e) {}
+  v = v || {};
+  v.off = v.off || {};
+  return v;
+})();
+
+function saveMview() { try { localStorage.setItem(MARK_VIEW_KEY, JSON.stringify(mview)); } catch (e) {} }
+function uid(prefix) { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function today() {
+  var d = new Date();
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function mkSay(msg, cls) { $('mkStatus').textContent = msg; $('mkStatus').className = cls || ''; }
+function edSay(msg, cls) { $('edStatus').textContent = msg; $('edStatus').className = cls || ''; }
+function layerOf(id) {
+  for (var i = 0; i < layers.length; i++) if (layers[i].id === id) return layers[i];
+  return { id: id, name: '(no layer)', color: '#7890a0' };
+}
+function colorOf(id) { var c = layerOf(id).color; return COLOR_RE.test(c) ? c : '#7890a0'; }
+function centroid(ring) {
+  var la = 0, lo = 0;
+  ring.forEach(function (p) { la += p[0]; lo += p[1]; });
+  return [la / ring.length, lo / ring.length];
+}
+function markCentre(m) { return m.kind === 'point' ? m.pos : centroid(m.ring); }
+function areaM2(ring) {
+  var R = 6371008.8, k = Math.PI / 180, c = Math.cos(centroid(ring)[0] * k), a = 0;
+  for (var i = 0; i < ring.length; i++) {
+    var p = ring[i], q = ring[(i + 1) % ring.length];
+    a += (p[1] * k * R * c) * (q[0] * k * R) - (q[1] * k * R * c) * (p[0] * k * R);
+  }
+  return Math.abs(a / 2);
+}
+function fmtArea(a) { return a < 10000 ? Math.round(a) + ' m²' : (a / 10000).toFixed(2) + ' ha'; }
+function markSub(m) {
+  var bits = [m.kind === 'area' ? 'area ' + fmtArea(areaM2(m.ring)) : fmt(m.pos[0], m.pos[1])];
+  if (m.depth !== null && m.depth !== undefined) bits.push(m.depth + ' m');
+  if (m.seen) bits.push(m.seen);
+  return bits.join('  ·  ');
+}
+
+// ── Local copy ──
+function cacheMarks() {
+  try {
+    localStorage.setItem(MARKS_CACHE_KEY, JSON.stringify({ layers: layers, layersAt: layersAt, marks: marks, gone: gone }));
+  } catch (e) {}
+}
+function cachedMarks() {
+  try { return JSON.parse(localStorage.getItem(MARKS_CACHE_KEY) || 'null'); } catch (e) { return null; }
+}
+function upsertLocal(m) {
+  for (var i = 0; i < marks.length; i++) if (marks[i].id === m.id) { marks[i] = m; return; }
+  marks.push(m);
+}
+
+function loadMarks() {
+  mkSay('Loading marks…', '');
+  return api('GET', null, '/marks').then(function (data) {
+    var c = cachedMarks(), now = Date.now();
+    layers = data.layers || [];
+    marks = data.marks || [];
+    gone = {};
+    // Anything changed here in the last few minutes may not have reached
+    // every KV location yet, so the local copy wins for those.
+    if (c) {
+      var byId = {};
+      marks.forEach(function (m) { byId[m.id] = m; });
+      (c.marks || []).forEach(function (m) {
+        if (now - (m.updated || 0) < RECENT_MS && (!byId[m.id] || (byId[m.id].updated || 0) < m.updated)) byId[m.id] = m;
+      });
+      Object.keys(c.gone || {}).forEach(function (id) {
+        if (now - c.gone[id] < RECENT_MS) { delete byId[id]; gone[id] = c.gone[id]; }
+      });
+      marks = Object.keys(byId).map(function (k) { return byId[k]; });
+      if (c.layers && now - (c.layersAt || 0) < RECENT_MS) { layers = c.layers; layersAt = c.layersAt; }
+    }
+    marksLoaded = true;
+    if (!data.layers) {
+      if (!layers.length) layers = DEFAULT_LAYERS.map(function (l) { return { id: uid('l'), name: l.name, color: l.color }; });
+      saveLayers().catch(function () {});
+    }
+    cacheMarks();
+    drawMarks();
+    mkSay('', '');
+  }).catch(function (err) {
+    var c = cachedMarks();
+    if (c && !marksLoaded) { layers = c.layers || []; marks = c.marks || []; }
+    drawMarks();
+    mkSay('Could not load marks from the server: ' + err.message + '.' +
+          (c ? ' Showing the copy saved in this browser; changes need the connection.' : ''), 'bad');
+    if (/secret|https/.test(err.message)) $('settings').open = true;
+  });
+}
+function saveLayers() {
+  layersAt = Date.now();
+  cacheMarks();
+  return api('PUT', { layers: layers }, '/marks').then(function (data) {
+    layers = data.layers;
+    cacheMarks();
+  }).catch(function (err) {
+    mkSay('Layers not saved: ' + err.message + '.', 'bad');
+    throw err;
+  });
+}
+
+// ── Drawing everything ──
+function drawMarks() {
+  renderLayerList();
+  renderMarkList();
+  renderLayerSelect();
+  if (!lmap) return;
+  Object.keys(shapes).forEach(function (id) { lmap.removeLayer(shapes[id]); });
+  shapes = {};
+  marks.forEach(function (m) {
+    if (mview.off[m.layer] && !(edit && edit.m.id === m.id)) return;
+    var s = shapeFor(m, edit && edit.m.id === m.id);
+    s.addTo(lmap);
+    shapes[m.id] = s;
+  });
+}
+function dotIcon(color, sel) {
+  return L.divIcon({
+    className: 'mk-icon', iconSize: [16, 16], iconAnchor: [8, 8],
+    html: '<div class="mk-dot' + (sel ? ' sel' : '') + '" style="background:' + (COLOR_RE.test(color) ? color : '#7890a0') + '"></div>'
+  });
+}
+function shapeFor(m, sel) {
+  var color = colorOf(m.layer), s;
+  if (m.kind === 'point') {
+    s = L.marker(m.pos, { icon: dotIcon(color, sel), keyboard: false, draggable: !!sel, zIndexOffset: sel ? 1000 : 0 });
+    if (sel) s.on('dragend', function () {
+      var ll = s.getLatLng().wrap();
+      edit.m.pos = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
+      edit.m.depth = null; edit.m.landform = '';
+      edInfo(); lookupSeed();
+    });
+  } else {
+    s = L.polygon(m.ring, { color: color, weight: sel ? 4 : 2, fillColor: color, fillOpacity: sel ? 0.28 : 0.15, bubblingMouseEvents: false });
+  }
+  if (m.name) {
+    s.bindTooltip(m.name, {
+      className: 'mk-label', permanent: !!mview.labels,
+      direction: m.kind === 'point' ? 'right' : 'center', offset: m.kind === 'point' ? [10, 0] : [0, 0]
+    });
+  }
+  s.on('click', function (e) {
+    if (tool !== 'pick') { onToolClick(e); return; }
+    if (!(edit && edit.m.id === m.id)) openEditor(m, false);
+  });
+  return s;
+}
+
+function renderLayerSelect() {
+  var sel = $('edLayer'), cur = edit ? edit.m.layer : sel.value;
+  sel.textContent = '';
+  layers.forEach(function (l) {
+    var o = document.createElement('option');
+    o.value = l.id; o.textContent = l.name;
+    sel.appendChild(o);
+  });
+  if (cur && layers.some(function (l) { return l.id === cur; })) sel.value = cur;
+}
+
+function renderLayerList() {
+  var box = $('layerList');
+  box.textContent = '';
+  var count = {};
+  marks.forEach(function (m) { count[m.layer] = (count[m.layer] || 0) + 1; });
+  layers.forEach(function (l) {
+    var row = document.createElement('div'); row.className = 'lyr';
+    var vis = document.createElement('input'); vis.type = 'checkbox'; vis.checked = !mview.off[l.id];
+    vis.title = 'Show this layer on the map';
+    vis.addEventListener('change', function () {
+      if (vis.checked) delete mview.off[l.id]; else mview.off[l.id] = true;
+      saveMview(); drawMarks();
+    });
+    var col = document.createElement('input'); col.type = 'color'; col.value = COLOR_RE.test(l.color) ? l.color : '#00d4ff';
+    col.title = 'Layer colour';
+    col.addEventListener('change', function () {
+      l.color = col.value.toLowerCase();
+      drawMarks();
+      saveLayers().catch(function () {});
+    });
+    var nm = document.createElement('input'); nm.type = 'text'; nm.maxLength = 30; nm.value = l.name;
+    nm.spellcheck = false; nm.title = 'Rename the layer';
+    nm.addEventListener('change', function () {
+      var v = nm.value.replace(/\s+/g, ' ').trim();
+      if (!v) { nm.value = l.name; return; }
+      l.name = v;
+      drawMarks();
+      saveLayers().catch(function () {});
+    });
+    var n = document.createElement('span'); n.className = 'n'; n.textContent = count[l.id] || 0;
+    n.title = (count[l.id] || 0) + ' marks';
+    var del = document.createElement('button'); del.className = 'quiet';
+    var armed = delArm === l.id;
+    del.textContent = armed ? (count[l.id] ? 'DELETE ' + count[l.id] + '?' : 'SURE?') : '✕';
+    if (armed) del.classList.add('danger');
+    del.title = 'Delete the layer and its marks';
+    del.addEventListener('click', function () { deleteLayer(l, armed); });
+    row.appendChild(vis); row.appendChild(col); row.appendChild(nm); row.appendChild(n); row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function renderMarkList() {
+  var box = $('markList'), q = $('mkSearch').value.trim().toLowerCase();
+  box.textContent = '';
+  var order = {};
+  layers.forEach(function (l, i) { order[l.id] = i; });
+  var list = marks.filter(function (m) {
+    return !q || (m.name + ' ' + (m.notes || '') + ' ' + layerOf(m.layer).name).toLowerCase().indexOf(q) !== -1;
+  }).sort(function (a, b) {
+    var la = order[a.layer] === undefined ? 999 : order[a.layer], lb = order[b.layer] === undefined ? 999 : order[b.layer];
+    return la - lb || a.name.localeCompare(b.name);
+  });
+  if (!list.length) {
+    var e = document.createElement('div'); e.className = 'empty';
+    e.textContent = marks.length ? 'No marks match.' : 'No marks yet. Use + MARK or + AREA on the map.';
+    box.appendChild(e);
+    return;
+  }
+  list.forEach(function (m) {
+    var row = document.createElement('div');
+    row.className = 'mkrow' + (mview.off[m.layer] ? ' dim' : '');
+    var sw = document.createElement('span'); sw.className = 'sw' + (m.kind === 'area' ? ' area' : '');
+    sw.style.background = colorOf(m.layer);
+    var txt = document.createElement('div');
+    var nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = m.name;
+    var sub = document.createElement('div'); sub.className = 'sub';
+    sub.textContent = layerOf(m.layer).name + '  ·  ' + markSub(m);
+    if (m.notes) row.title = m.notes;
+    txt.appendChild(nm); txt.appendChild(sub);
+    row.appendChild(sw); row.appendChild(txt);
+    row.addEventListener('click', function () {
+      if (mview.off[m.layer]) { delete mview.off[m.layer]; saveMview(); }
+      openEditor(m, false);
+      zoomTo(m);
+    });
+    box.appendChild(row);
+  });
+}
+$('mkSearch').addEventListener('input', renderMarkList);
+
+function zoomTo(m) {
+  if (!lmap) return;
+  if (m.kind === 'point') lmap.setView(m.pos, Math.max(lmap.getZoom(), 17));
+  else lmap.fitBounds(L.latLngBounds(m.ring), { padding: [40, 40], maxZoom: 19 });
+}
+
+// ── Layers ──
+$('addLayer').addEventListener('click', addLayer);
+$('newLayer').addEventListener('keydown', function (e) { if (e.key === 'Enter') addLayer(); });
+function addLayer() {
+  var name = $('newLayer').value.replace(/\s+/g, ' ').trim();
+  if (!name) { $('newLayer').focus(); return; }
+  if (!marksLoaded) { mkSay('Marks have not loaded from the server yet.', 'bad'); return; }
+  if (layers.length >= 30) { mkSay('At most 30 layers.', 'bad'); return; }
+  var palette = ['#ffd23f', '#c77dff', '#ff8fab', '#7bdff2', '#b5e48c', '#f4a261', '#e9ecef'];
+  layers.push({ id: uid('l'), name: name, color: palette[layers.length % palette.length] });
+  $('newLayer').value = '';
+  drawMarks();
+  saveLayers().then(function () { mkSay('Layer "' + name + '" added.', 'ok'); }).catch(function () {});
+}
+function deleteLayer(l, armed) {
+  if (!armed) { delArm = l.id; renderLayerList(); return; }
+  delArm = null;
+  if (layers.length === 1) { mkSay('Keep at least one layer.', 'bad'); renderLayerList(); return; }
+  var ids = marks.filter(function (m) { return m.layer === l.id; }).map(function (m) { return m.id; });
+  var first = ids.length ? api('DELETE', { ids: ids }, '/marks') : Promise.resolve();
+  first.then(function () {
+    var now = Date.now();
+    ids.forEach(function (id) { gone[id] = now; });
+    marks = marks.filter(function (m) { return m.layer !== l.id; });
+    layers = layers.filter(function (x) { return x.id !== l.id; });
+    if (edit && edit.m.layer === l.id) closeEditor();
+    drawMarks();
+    return saveLayers();
+  }).then(function () {
+    mkSay('Layer "' + l.name + '" deleted' + (ids.length ? ' with its ' + ids.length + ' marks.' : '.'), 'ok');
+  }).catch(function (err) { mkSay('Layer not deleted: ' + err.message + '.', 'bad'); drawMarks(); });
+}
+
+// ── Editor ──
+function newMark(kind, geom) {
+  if (!layers.length) { mkSay('Add a layer first.', 'bad'); return null; }
+  var layer = layers.some(function (l) { return l.id === mview.lastLayer; }) ? mview.lastLayer : layers[0].id;
+  var m = { id: uid('m'), layer: layer, kind: kind, name: '', notes: '', depth: null, landform: '', seen: today(), created: Date.now() };
+  if (kind === 'point') m.pos = geom; else m.ring = geom;
+  return m;
+}
+function openEditor(m, isNew) {
+  if (!m) return;
+  if (edit && edit.temp) lmap.removeLayer(edit.temp);
+  delArm = null;
+  edit = { m: JSON.parse(JSON.stringify(m)), isNew: isNew, temp: null };
+  $('editor').hidden = false;
+  $('edTitle').textContent = (isNew ? 'New ' : 'Edit ') + (m.kind === 'area' ? 'area' : 'mark');
+  $('edName').value = m.name || '';
+  renderLayerSelect();
+  $('edLayer').value = m.layer;
+  $('edSeen').value = m.seen || '';
+  $('edNotes').value = m.notes || '';
+  $('edDel').hidden = isNew;
+  $('edDel').textContent = 'DELETE';
+  $('edDel').classList.remove('danger');
+  edSay('', '');
+  edInfo();
+  drawMarks();
+  if (isNew && lmap) {
+    edit.temp = shapeFor(edit.m, true).addTo(lmap);
+  }
+  if (edit.m.depth === null || edit.m.depth === undefined) lookupSeed();
+  if (window.innerWidth < 960) $('editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('edName').focus({ preventScroll: true });
+}
+function closeEditor() {
+  if (edit && edit.temp && lmap) lmap.removeLayer(edit.temp);
+  edit = null;
+  $('editor').hidden = true;
+  drawMarks();
+}
+function edInfo() {
+  var m = edit.m, bits = [];
+  bits.push(m.kind === 'point' ? fmt(m.pos[0], m.pos[1]) : 'Area of ' + fmtArea(areaM2(m.ring)) + ', ' + m.ring.length + ' corners');
+  if (m.depth !== null && m.depth !== undefined) bits.push('depth about ' + m.depth + ' m' + (m.kind === 'area' ? ' in the middle' : ''));
+  if (m.landform) bits.push(m.landform);
+  $('edInfo').textContent = bits.join(' · ') + (m.kind === 'point' ? '. Drag the dot to move it.' : '');
+}
+// Fills in what SEED knows at the mark (or the middle of the area).
+function lookupSeed() {
+  if (!lmap || !edit) return;
+  var mine = edit, c = markCentre(edit.m), ll = L.latLng(c[0], c[1]);
+  Promise.all([seedIdentify(LIDAR, 2, ll), seedIdentify(LANDFORMS, 0, ll)]).then(function (res) {
+    if (edit !== mine) return;
+    var d = res[0] ? parseFloat(res[0]['Pixel Value']) : NaN;
+    if (isFinite(d)) mine.m.depth = +Math.abs(d).toFixed(1);
+    if (res[1] && res[1].LANDFORM) mine.m.landform = String(res[1].LANDFORM).toLowerCase().slice(0, 40);
+    edInfo();
+  });
+}
+function readEditor() {
+  var m = edit.m;
+  m.name = $('edName').value.replace(/\s+/g, ' ').trim();
+  m.layer = $('edLayer').value;
+  m.seen = $('edSeen').value;
+  m.notes = $('edNotes').value;
+  return m;
+}
+function saveEdit() {
+  var m = readEditor();
+  if (!m.name) { edSay('Give the mark a name.', 'bad'); $('edName').focus(); return; }
+  if (!m.layer) { edSay('Pick a layer.', 'bad'); return; }
+  var mine = edit;
+  $('edSave').disabled = true;
+  edSay('Saving…', '');
+  api('PUT', { mark: m }, '/marks').then(function (data) {
+    upsertLocal(data.mark);
+    delete gone[data.mark.id];
+    mview.lastLayer = data.mark.layer; saveMview();
+    cacheMarks();
+    if (edit === mine) closeEditor(); else drawMarks();
+    mkSay('Saved "' + data.mark.name + '" in ' + layerOf(data.mark.layer).name + '.', 'ok');
+  }).catch(function (err) {
+    edSay('Not saved: ' + err.message + '.', 'bad');
+    if (/secret|https/.test(err.message)) $('settings').open = true;
+  }).then(function () { $('edSave').disabled = false; });
+}
+function deleteMark() {
+  var btn = $('edDel');
+  if (!btn.classList.contains('danger')) { btn.textContent = 'SURE? DELETE'; btn.classList.add('danger'); return; }
+  var id = edit.m.id, name = edit.m.name;
+  btn.disabled = true;
+  api('DELETE', { ids: [id] }, '/marks').then(function () {
+    marks = marks.filter(function (m) { return m.id !== id; });
+    gone[id] = Date.now();
+    cacheMarks();
+    closeEditor();
+    mkSay('Deleted "' + name + '".', 'ok');
+  }).catch(function (err) { edSay('Not deleted: ' + err.message + '.', 'bad'); })
+    .then(function () { btn.disabled = false; });
+}
+// Sends the mark (an area: its middle) to the phone as a waypoint.
+function sendMark() {
+  var m = readEditor();
+  if (!m.name) { edSay('Give the mark a name first.', 'bad'); $('edName').focus(); return; }
+  var c = markCentre(m), plan = $('plan').checked;
+  $('edSend').disabled = true;
+  edSay('Sending…', '');
+  api('POST', { waypoints: [{ name: m.name, lat: +c[0].toFixed(6), lon: +c[1].toFixed(6), plan: plan }] }).then(function () {
+    edSay('Sent to the phone' + (m.kind === 'area' ? ' (middle of the area)' : '') +
+          (plan ? ', for the plan and library.' : ', for the library only.'), 'ok');
+    refresh();
+  }).catch(function (err) { edSay('Not sent: ' + err.message + '.', 'bad'); })
+    .then(function () { $('edSend').disabled = false; });
+}
+$('edSave').addEventListener('click', saveEdit);
+$('edSend').addEventListener('click', sendMark);
+$('edDel').addEventListener('click', deleteMark);
+$('edClose').addEventListener('click', closeEditor);
+$('edName').addEventListener('keydown', function (e) { if (e.key === 'Enter') saveEdit(); });
+$('edLayer').addEventListener('change', function () {
+  if (!edit) return;
+  edit.m.layer = $('edLayer').value;
+  if (edit.temp) { lmap.removeLayer(edit.temp); edit.temp = shapeFor(edit.m, true).addTo(lmap); }
+  else if (shapes[edit.m.id]) { lmap.removeLayer(shapes[edit.m.id]); shapes[edit.m.id] = shapeFor(edit.m, true).addTo(lmap); }
+});
+
+// ── Map tools ──
+function setTool(t) {
+  if (t !== 'area' && draw) stopDraw();
+  tool = t;
+  $('toolPick').className = t === 'pick' ? 'on' : '';
+  $('toolPoint').className = t === 'point' ? 'on' : '';
+  $('toolArea').className = t === 'area' ? 'on' : '';
+  if (t === 'point') mapSay('Click where the mark goes.', '');
+  else if (t === 'area') startDraw();
+  else if (/^Click/.test($('mapStatus').textContent)) mapSay('', '');
+}
+function toolButton(id, t) {
+  $(id).addEventListener('click', function () {
+    if (!lmap) return;
+    if (t !== 'pick' && !marksLoaded) { mapSay('Marks need the connection: set the shared secret under Connection.', 'bad'); return; }
+    setTool(tool === t ? 'pick' : t);
+  });
+}
+toolButton('toolPick', 'pick');
+toolButton('toolPoint', 'point');
+toolButton('toolArea', 'area');
+$('showLabels').checked = !!mview.labels;
+$('showLabels').addEventListener('change', function () {
+  mview.labels = $('showLabels').checked; saveMview(); drawMarks();
+  if (edit && edit.temp) { lmap.removeLayer(edit.temp); edit.temp = shapeFor(edit.m, true).addTo(lmap); }
+});
+
+function onToolClick(e) {
+  var ll = e.latlng.wrap();
+  if (tool === 'point') {
+    setTool('pick');
+    openEditor(newMark('point', [+ll.lat.toFixed(6), +ll.lng.toFixed(6)]), true);
+  } else if (tool === 'area') {
+    addCorner(ll);
+  }
+}
+function startDraw() {
+  draw = {
+    ring: [],
+    line: L.polyline([], { color: '#ffffff', weight: 2, dashArray: '5 5', interactive: false }).addTo(lmap),
+    dots: L.layerGroup().addTo(lmap)
+  };
+  lmap.doubleClickZoom.disable();
+  $('drawBar').hidden = false;
+  drawMsg();
+}
+function stopDraw() {
+  if (!draw) return;
+  lmap.removeLayer(draw.line); lmap.removeLayer(draw.dots);
+  draw = null;
+  lmap.doubleClickZoom.enable();
+  $('drawBar').hidden = true;
+}
+function drawMsg() {
+  var n = draw.ring.length;
+  $('drawMsg').textContent = n < 3
+    ? 'Click the corners of the area (' + n + ' so far, at least 3).'
+    : n + ' corners. Click the first corner, double-click, or FINISH AREA to close it.';
+  $('drawUndo').disabled = !n;
+  $('drawDone').disabled = n < 3;
+}
+function redrawOutline() {
+  draw.line.setLatLngs(draw.ring);
+  draw.dots.clearLayers();
+  draw.ring.forEach(function (p, i) {
+    L.circleMarker(p, { radius: i === 0 ? 6 : 4, color: '#001018', weight: 1.5, fillColor: '#ffffff', fillOpacity: 1, interactive: false }).addTo(draw.dots);
+  });
+  drawMsg();
+}
+function px(p) { return lmap.latLngToContainerPoint(L.latLng(p[0], p[1])); }
+function addCorner(ll) {
+  var here = lmap.latLngToContainerPoint(ll), n = draw.ring.length;
+  if (n >= 3 && here.distanceTo(px(draw.ring[0])) < 12) { finishDraw(); return; }
+  // The two clicks of a double-click land on the same spot: count them once.
+  if (n && here.distanceTo(px(draw.ring[n - 1])) < 5) return;
+  if (n >= 200) { $('drawMsg').textContent = 'That is the most corners an area can have (200). FINISH AREA to close it.'; return; }
+  draw.ring.push([+ll.lat.toFixed(6), +ll.lng.toFixed(6)]);
+  redrawOutline();
+}
+function finishDraw() {
+  if (!draw || draw.ring.length < 3) return;
+  var ring = draw.ring.slice();
+  setTool('pick');
+  openEditor(newMark('area', ring), true);
+}
+$('drawUndo').addEventListener('click', function () { if (draw) { draw.ring.pop(); redrawOutline(); } });
+$('drawDone').addEventListener('click', finishDraw);
+$('drawCancel').addEventListener('click', function () { setTool('pick'); });
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  if (tool !== 'pick') setTool('pick');
+  else if (edit && document.activeElement !== $('edNotes')) closeEditor();
+});
+if (lmap) {
+  lmap.on('click', function (e) { if (tool !== 'pick') onToolClick(e); });
+  lmap.on('dblclick', function () { if (tool === 'area') finishDraw(); });
+}
+
+// ── Export and import ──
+function download(name, type, text) {
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: type }));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
+function toGeoJSON() {
+  return {
+    type: 'FeatureCollection',
+    divenav: { layers: layers },
+    features: marks.map(function (m) {
+      var l = layerOf(m.layer);
+      return {
+        type: 'Feature',
+        geometry: m.kind === 'point'
+          ? { type: 'Point', coordinates: [m.pos[1], m.pos[0]] }
+          : { type: 'Polygon', coordinates: [m.ring.concat([m.ring[0]]).map(function (p) { return [p[1], p[0]]; })] },
+        properties: {
+          id: m.id, name: m.name, layer: l.name, layerId: m.layer, color: l.color,
+          notes: m.notes || '', depth_m: m.depth, landform: m.landform || '', seen: m.seen || '',
+          created: m.created ? new Date(m.created).toISOString() : '', updated: m.updated ? new Date(m.updated).toISOString() : ''
+        }
+      };
+    })
+  };
+}
+function xml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function toKML() {
+  var out = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>DiveNav marks</name>'];
+  layers.forEach(function (l) {
+    var c = (COLOR_RE.test(l.color) ? l.color : '#00d4ff').slice(1);
+    var bgr = c.slice(4, 6) + c.slice(2, 4) + c.slice(0, 2);
+    out.push('<Style id="s' + l.id + '"><IconStyle><color>ff' + bgr + '</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>' +
+             '<LineStyle><color>ff' + bgr + '</color><width>2</width></LineStyle><PolyStyle><color>40' + bgr + '</color></PolyStyle></Style>');
+  });
+  layers.concat([{ id: '', name: '(no layer)' }]).forEach(function (l) {
+    var mine = marks.filter(function (m) { return l.id ? m.layer === l.id : !layers.some(function (x) { return x.id === m.layer; }); });
+    if (!mine.length) return;
+    out.push('<Folder><name>' + xml(l.name) + '</name>');
+    mine.forEach(function (m) {
+      var desc = [m.notes, m.depth !== null && m.depth !== undefined ? 'Depth about ' + m.depth + ' m' : '', m.landform, m.seen ? 'Seen ' + m.seen : '']
+        .filter(Boolean).join('\n');
+      var geom = m.kind === 'point'
+        ? '<Point><coordinates>' + m.pos[1] + ',' + m.pos[0] + '</coordinates></Point>'
+        : '<Polygon><outerBoundaryIs><LinearRing><coordinates>' +
+          m.ring.concat([m.ring[0]]).map(function (p) { return p[1] + ',' + p[0]; }).join(' ') +
+          '</coordinates></LinearRing></outerBoundaryIs></Polygon>';
+      out.push('<Placemark><name>' + xml(m.name) + '</name><description>' + xml(desc) + '</description>' +
+               (l.id ? '<styleUrl>#s' + l.id + '</styleUrl>' : '') + geom + '</Placemark>');
+    });
+    out.push('</Folder>');
+  });
+  out.push('</Document></kml>');
+  return out.join('\n');
+}
+$('mkGeo').addEventListener('click', function () {
+  download('divenav-marks-' + today() + '.geojson', 'application/geo+json', JSON.stringify(toGeoJSON(), null, 1));
+});
+$('mkKml').addEventListener('click', function () {
+  download('divenav-marks-' + today() + '.kml', 'application/vnd.google-earth.kml+xml', toKML());
+});
+$('mkImport').addEventListener('click', function () {
+  if (!marksLoaded) { mkSay('Marks have not loaded from the server yet.', 'bad'); return; }
+  $('importFile').value = '';
+  $('importFile').click();
+});
+$('importFile').addEventListener('change', function () {
+  var f = $('importFile').files[0];
+  if (!f) return;
+  f.text().then(function (text) { return importGeoJSON(JSON.parse(text)); })
+    .catch(function (err) { mkSay('Could not import that file: ' + err.message + '.', 'bad'); });
+});
+// Re-importing a DiveNav export overwrites the same marks rather than
+// duplicating them, because the ids travel with the file.
+function importGeoJSON(gj) {
+  if (!gj || !Array.isArray(gj.features)) throw new Error('not a GeoJSON FeatureCollection');
+  var known = (gj.divenav && Array.isArray(gj.divenav.layers)) ? gj.divenav.layers : [];
+  var newLayers = false, skipped = 0, todo = [];
+  function layerFor(props) {
+    var id = props.layerId, name = String(props.layer || 'Imported').slice(0, 30);
+    var hit = layers.filter(function (l) { return l.id === id; })[0] ||
+              layers.filter(function (l) { return l.name.toLowerCase() === name.toLowerCase(); })[0];
+    if (hit) return hit.id;
+    var meta = known.filter(function (l) { return l.id === id; })[0];
+    var l = {
+      id: /^l[a-z0-9]{6,24}$/.test(id || '') ? id : uid('l'),
+      name: meta ? meta.name : name,
+      color: COLOR_RE.test(props.color || '') ? props.color : '#ffd23f'
+    };
+    layers.push(l); newLayers = true;
+    return l.id;
+  }
+  function ll(c) { return Array.isArray(c) && isFinite(c[0]) && isFinite(c[1]) ? [+(+c[1]).toFixed(6), +(+c[0]).toFixed(6)] : null; }
+  gj.features.forEach(function (f) {
+    var g = f && f.geometry, p = (f && f.properties) || {}, m;
+    if (!g) { skipped++; return; }
+    if (g.type === 'Point' && ll(g.coordinates)) {
+      m = { kind: 'point', pos: ll(g.coordinates) };
+    } else if (g.type === 'Polygon' && Array.isArray(g.coordinates) && Array.isArray(g.coordinates[0])) {
+      var ring = g.coordinates[0].map(ll).filter(Boolean);
+      var a = ring[0], z = ring[ring.length - 1];
+      if (ring.length > 1 && a[0] === z[0] && a[1] === z[1]) ring.pop();
+      if (ring.length < 3 || ring.length > 200) { skipped++; return; }
+      m = { kind: 'area', ring: ring };
+    } else { skipped++; return; }
+    m.id = /^m[a-z0-9]{6,24}$/.test(p.id || '') ? p.id : uid('m');
+    m.layer = layerFor(p);
+    m.name = String(p.name || 'Imported mark');
+    m.notes = String(p.notes || '');
+    m.depth = typeof p.depth_m === 'number' ? p.depth_m : null;
+    m.landform = String(p.landform || '');
+    m.seen = String(p.seen || '');
+    m.created = Date.parse(p.created) || Date.now();
+    todo.push(m);
+  });
+  if (!todo.length) { mkSay('Nothing in that file could be imported.', 'bad'); return; }
+  if (marks.length + todo.length > 900) { mkSay('That would go past 900 marks.', 'bad'); return; }
+  var done = 0, failed = 0;
+  mkSay('Importing ' + todo.length + ' marks…', '');
+  // A few at a time, so a large file does not trip the Worker's rate limits.
+  function next() {
+    var m = todo.shift();
+    if (!m) return Promise.resolve();
+    return api('PUT', { mark: m }, '/marks').then(function (data) { upsertLocal(data.mark); done++; })
+      .catch(function () { failed++; })
+      .then(function () { mkSay('Importing… ' + done + ' saved', ''); return next(); });
+  }
+  (newLayers ? saveLayers() : Promise.resolve()).then(function () {
+    return Promise.all([next(), next(), next(), next()]);
+  }).then(function () {
+    cacheMarks(); drawMarks();
+    mkSay('Imported ' + done + ' marks' + (failed ? ', ' + failed + ' failed' : '') +
+          (skipped ? ', ' + skipped + ' features skipped (only points and simple areas are read)' : '') + '.', failed ? 'bad' : 'ok');
+  }).catch(function (err) { mkSay('Import stopped: ' + err.message + '.', 'bad'); });
+}
+
+// Show whatever this browser saved last time straight away; loadMarks()
+// replaces it once the server answers.
+(function () {
+  var c = cachedMarks();
+  if (c) { layers = c.layers || []; marks = c.marks || []; }
+  drawMarks();
+})();
+
 // ── Connection settings ─────────────────────────────────────────────
 (function () {
   var cfg = loadCfg();
   $('url').value = cfg.url;
   $('token').value = cfg.token;
-  if (cfg.token) refresh(); else $('settings').open = true;
+  if (cfg.token) { refresh(); loadMarks(); } else $('settings').open = true;
 })();
 $('saveCfg').addEventListener('click', function () {
   var url = $('url').value.trim() || DEFAULT_URL;
@@ -557,6 +1340,7 @@ $('saveCfg').addEventListener('click', function () {
   setStatus('Connection saved.', 'ok');
   $('settings').open = false;
   refresh();
+  loadMarks();
 });
 </script>
 </body>
