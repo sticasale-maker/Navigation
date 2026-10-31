@@ -170,6 +170,8 @@ path.mk-sel { cursor: move; }
 .leaflet-tooltip.mk-label .l1, .leaflet-tooltip.mk-label .l2 { color: inherit; }
 .leaflet-tooltip.mk-label .l2 { font-weight: 400; }
 .leaflet-tooltip.mk-label::before { display: none; }
+.leaflet-tooltip.ruler-label { background: #0a0e12; border: 1px solid #ffd23f; color: #ffd23f; font: 600 13px var(--mono); padding: 3px 7px; box-shadow: none; }
+.leaflet-tooltip.ruler-label::before { display: none; }
 </style>
 </head>
 <body>
@@ -187,7 +189,7 @@ path.mk-sel { cursor: move; }
         <button id="baseSat">SATELLITE</button>
       </div>
     </div>
-    <div class="hint">NSW SEED seabed data over a base map. Scroll to zoom, drag to move. With PICK WAYPOINT on, a click picks the waypoint. The + buttons draw marks: a point, a polygon, a circle, an ellipse or a freehand outline, or + BY COORDS to type one in. Click a mark to edit it.</div>
+    <div class="hint">NSW SEED seabed data over a base map. Scroll to zoom, drag to move. With PICK WAYPOINT on, a click picks the waypoint. The + buttons draw marks: a point, a polygon, a circle, an ellipse or a freehand outline, or + BY COORDS to type one in. Click a mark to edit it. RULER measures between two clicks.</div>
     <div class="tools">
       <button id="toolPick" class="on">PICK WAYPOINT</button>
       <button id="toolPoint">+ MARK</button>
@@ -197,6 +199,7 @@ path.mk-sel { cursor: move; }
       <button id="toolEllipse" title="Click the centre, the end of the long side, then the width">+ ELLIPSE</button>
       <button id="toolFree" title="Hold the mouse button and draw">+ FREEHAND</button>
       <button id="toolCoords" title="Type or paste the coordinates">+ BY COORDS</button>
+      <button id="toolRuler" title="Click two points to measure between them">RULER</button>
     </div>
     <div class="labels" id="labelPick">
       <span>Labels on map:</span>
@@ -566,7 +569,7 @@ var SEED_LAYERS = [
 var SEED_MIN_ZOOM = 11;       // the services draw nothing useful further out
 var VIEW_KEY = 'divenav_pcmapview';
 var lmap = null, pickMarker = null, pickSeq = 0;
-var tool = 'pick';            // pick | point | poly | circle | ellipse | free
+var tool = 'pick';            // pick | point | poly | circle | ellipse | free | ruler
 var toolDone = 0;
 
 function mapSay(msg, cls) {
@@ -761,6 +764,7 @@ var marks = [], layers = [], gone = {}, layersAt = 0, marksLoaded = false;
 var shapes = {};          // mark id -> Leaflet layer
 var edit = null;          // { m: working copy, isNew, byCoords, geoType, geoErr, temp }
 var draw = null;          // shape being drawn on the map
+var ruler = null;         // measurement under way, while the RULER tool is on
 var delArm = null;        // layer id armed for a two-tap delete
 var mview = (function () {
   var v = null;
@@ -988,6 +992,7 @@ function shapeFor(m, sel) {
     });
   }
   s.on('click', function (e) {
+    if (tool === 'ruler' && m.kind === 'point') { rulerClick(L.latLng(m.pos[0], m.pos[1])); return; }   // measure from the mark itself
     if (tool !== 'pick') { onToolClick(e); return; }
     if (!(edit && edit.m.id === m.id)) openEditor(m, false);
   });
@@ -1654,19 +1659,21 @@ $('edLayer').addEventListener('change', function () {
 });
 
 // ── Map tools ──
-var TOOL_IDS = { pick: 'toolPick', point: 'toolPoint', line: 'toolLine', poly: 'toolPoly', circle: 'toolCircle', ellipse: 'toolEllipse', free: 'toolFree' };
+var TOOL_IDS = { pick: 'toolPick', point: 'toolPoint', line: 'toolLine', poly: 'toolPoly', circle: 'toolCircle', ellipse: 'toolEllipse', free: 'toolFree', ruler: 'toolRuler' };
 function setTool(t) {
   stopDraw();
+  stopRuler();
   tool = t;
   Object.keys(TOOL_IDS).forEach(function (k) { $(TOOL_IDS[k]).className = k === t ? 'on' : ''; });
   if (t === 'point') mapSay('Click where the mark goes.', '');
   else if (/^Click where/.test($('mapStatus').textContent)) mapSay('', '');
-  if (t !== 'pick' && t !== 'point') startDraw(t);
+  if (t === 'ruler') startRuler();
+  else if (t !== 'pick' && t !== 'point') startDraw(t);
 }
 Object.keys(TOOL_IDS).forEach(function (t) {
   $(TOOL_IDS[t]).addEventListener('click', function () {
     if (!lmap) return;
-    if (t !== 'pick' && !marksLoaded) { mapSay('Marks need the connection: set the shared secret under Connection.', 'bad'); return; }
+    if (t !== 'pick' && t !== 'ruler' && !marksLoaded) { mapSay('Marks need the connection: set the shared secret under Connection.', 'bad'); return; }
     setTool(tool === t ? 'pick' : t);
   });
 });
@@ -1755,7 +1762,59 @@ function centreDot(p) {
 }
 function previewRing(ring) { draw.line.setLatLngs(ring.concat([ring[0]])); }
 
+// Ruler: two clicks, and the distance stays on the map until the next
+// measurement or until the tool is switched off. Nothing here is saved.
+function startRuler() {
+  ruler = {
+    a: null, b: null,
+    line: L.polyline([], { color: '#ffd23f', weight: 3, interactive: false }).addTo(lmap),
+    dots: L.layerGroup().addTo(lmap),
+    label: L.tooltip({ permanent: true, direction: 'center', className: 'ruler-label' })
+  };
+  lmap.doubleClickZoom.disable();
+  $('mapView').classList.add('drawing');
+  $('drawBar').hidden = false;
+  $('drawUndo').hidden = $('drawDone').hidden = true;
+  $('drawMsg').textContent = 'Click the first point.';
+}
+function stopRuler() {
+  if (!ruler) return;
+  lmap.removeLayer(ruler.line); lmap.removeLayer(ruler.dots); lmap.removeLayer(ruler.label);
+  ruler = null;
+  lmap.doubleClickZoom.enable();
+  $('mapView').classList.remove('drawing');
+  $('drawBar').hidden = true;
+}
+function rulerText(d) { return (d < 10 ? d.toFixed(1) : Math.round(d)) + ' m'; }
+function rulerShow(to) {
+  var d = lmap.distance(ruler.a, to);
+  ruler.line.setLatLngs([ruler.a, to]);
+  ruler.label.setLatLng(L.latLngBounds(ruler.a, to).getCenter()).setContent(rulerText(d));
+  if (!lmap.hasLayer(ruler.label)) ruler.label.addTo(lmap);
+  return d;
+}
+function rulerDot(ll) {
+  L.circleMarker(ll, { radius: 4, color: '#001018', weight: 1.5, fillColor: '#ffd23f', fillOpacity: 1, interactive: false }).addTo(ruler.dots);
+}
+function rulerClick(ll) {
+  if (!ruler.a || ruler.b) {
+    ruler.a = ll; ruler.b = null;
+    ruler.line.setLatLngs([]);
+    ruler.dots.clearLayers();
+    lmap.removeLayer(ruler.label);
+    rulerDot(ll);
+    $('drawMsg').textContent = 'Click the second point.';
+    return;
+  }
+  // The two clicks of a double-click land on the same spot: count them once.
+  if (lmap.latLngToContainerPoint(ll).distanceTo(lmap.latLngToContainerPoint(ruler.a)) < 5) return;
+  ruler.b = ll;
+  rulerDot(ll);
+  $('drawMsg').textContent = rulerText(rulerShow(ll)) + '. Click to measure again.';
+}
+
 function onToolClick(e) {
+  if (ruler) { rulerClick(e.latlng.wrap()); return; }
   var ll = e.latlng.wrap(), p = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)];
   if (tool === 'point') {
     setTool('pick');
@@ -1782,6 +1841,7 @@ function onToolClick(e) {
   }
 }
 function onToolMove(e) {
+  if (ruler && ruler.a && !ruler.b) { $('drawMsg').textContent = rulerText(rulerShow(e.latlng.wrap())) + '. Click the second point.'; return; }
   if (!draw) return;
   var p = [e.latlng.lat, e.latlng.lng];
   if (draw.kind === 'free' && draw.down) {
